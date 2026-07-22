@@ -92,7 +92,7 @@ class TopicUpdate(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def index_page(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html")
 
 # --- ROTAS DA API: DASHBOARD & CIDADES ---
 
