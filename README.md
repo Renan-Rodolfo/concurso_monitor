@@ -161,34 +161,6 @@ Para receber as notificações no Telegram:
 
 ---
 
-## 📤 Subindo o Projeto para o GitHub
-
-Se desejar publicar este projeto em um repositório próprio no GitHub para versionamento e manutenção contínua:
-
-1. **Navegue até a pasta do projeto**:
-   ```bash
-   cd concurso_monitor
-   ```
-
-2. **Inicializar o Git e criar a branch principal**:
-   ```bash
-   git init
-   git branch -M main
-   ```
-
-3. **Adicionar os arquivos e fazer o commit inicial**:
-   ```bash
-   git add .
-   git commit -m "feat: commit inicial do Concurso Monitor"
-   ```
-
-4. **Vincular ao seu repositório remoto no GitHub**:
-   ```bash
-   git remote add origin https://github.com/SEU_USUARIO/concurso-monitor.git
-   git push -u origin main
-   ```
-
----
 
 ## ⚙️ Variáveis de Ambiente (`.env`)
 
