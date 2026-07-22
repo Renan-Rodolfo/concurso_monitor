@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Concurso Monitor & Tracker de Estudos</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                            800: '#166534',
+                            900: '#14532d',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- FontAwesome icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+
+    <!-- Header Navigation -->
+    <header class="bg-slate-800/80 backdrop-blur-md border-b border-slate-700 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <div class="p-2 bg-brand-600 rounded-lg text-white font-bold text-xl shadow-lg">
+                        <i class="fa-solid fa-graduation-cap"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold text-white tracking-wide">Concurso Monitor</h1>
+                        <p class="text-xs text-slate-400">Monitor de editais e guia de estudos self-hosted</p>
+                    </div>
+                </div>
+
+                <!-- Tabs Navigation Buttons -->
+                <nav class="flex gap-2 bg-slate-900/60 p-1 rounded-xl border border-slate-700/60">
+                    <button id="tab-btn-dashboard" onclick="switchTab('dashboard')" class="tab-btn active px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2">
+                        <i class="fa-solid fa-chart-pie text-brand-500"></i> Dashboard & Concursos
+                    </button>
+                    <button id="tab-btn-studies" onclick="switchTab('studies')" class="tab-btn px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2">
+                        <i class="fa-solid fa-list-check text-blue-400"></i> Edital Verticalizado
+                    </button>
+                    <button id="tab-btn-telegram" onclick="switchTab('telegram')" class="tab-btn px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2">
+                        <i class="fa-brands fa-telegram text-sky-400"></i> Central de Alertas
+                    </button>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- Top Metrics Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-5 shadow-lg flex items-center gap-4">
+                <div class="p-3 bg-brand-500/10 text-brand-500 rounded-xl text-2xl">
+                    <i class="fa-solid fa-city"></i>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Cidades Monitoradas</p>
+                    <p id="stat-cities" class="text-2xl font-bold text-white">0</p>
+                </div>
+            </div>
+
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-5 shadow-lg flex items-center gap-4">
+                <div class="p-3 bg-blue-500/10 text-blue-400 rounded-xl text-2xl">
+                    <i class="fa-solid fa-bullhorn"></i>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Concursos Detectados</p>
+                    <p id="stat-concursos" class="text-2xl font-bold text-white">0</p>
+                </div>
+            </div>
+
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-5 shadow-lg flex items-center gap-4">
+                <div class="p-3 bg-purple-500/10 text-purple-400 rounded-xl text-2xl">
+                    <i class="fa-solid fa-book-open"></i>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Teoria Lida (Média)</p>
+                    <p id="stat-theory" class="text-2xl font-bold text-white">0%</p>
+                </div>
+            </div>
+
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-5 shadow-lg flex items-center gap-4">
+                <div class="p-3 bg-amber-500/10 text-amber-400 rounded-xl text-2xl">
+                    <i class="fa-solid fa-bullseye"></i>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Acertos em Questões</p>
+                    <p id="stat-accuracy" class="text-2xl font-bold text-white">0%</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notification Banner Container -->
+        <div id="toast-container" class="mb-6 hidden"></div>
+
+        <!-- ================= TAB 1: DASHBOARD & CONCURSOS ================= -->
+        <section id="tab-dashboard" class="tab-content block space-y-8">
+            
+            <!-- Target Cities & Scraper Trigger Header -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                <!-- Target Cities Management Panel -->
+                <div class="lg:col-span-2 bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-location-dot text-brand-500"></i> Cidades de Interesse
+                        </h2>
+                        <span class="text-xs text-slate-400">Insira cidades onde deseja acompanhar editais</span>
+                    </div>
+
+                    <!-- Add City Form -->
+                    <form onsubmit="handleAddCity(event)" class="flex gap-3 mb-4">
+                        <input type="text" id="input-city-name" placeholder="Ex: Sumaré, Campinas, Hortolândia..." required
+                               class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 transition-colors">
+                        <input type="text" id="input-city-uf" value="SP" placeholder="UF" maxlength="2"
+                               class="w-16 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-center uppercase text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 transition-colors">
+                        <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white font-medium px-5 py-2 rounded-xl text-sm transition-all flex items-center gap-2 shadow-lg shadow-brand-600/20">
+                            <i class="fa-solid fa-plus"></i> Adicionar
+                        </button>
+                    </form>
+
+                    <!-- Cities Chips Container -->
+                    <div id="cities-list" class="flex flex-wrap gap-2 min-h-[40px] p-2 bg-slate-900/40 rounded-xl border border-slate-800">
+                        <span class="text-xs text-slate-500 p-2">Nenhuma cidade cadastrada ainda...</span>
+                    </div>
+                </div>
+
+                <!-- Scraper Action Panel -->
+                <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
+                    <div>
+                        <h2 class="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                            <i class="fa-solid fa-robot text-purple-400"></i> Scraper Automático
+                        </h2>
+                        <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                            O rastreador consulta diariamente os portais <strong>PCI Concursos</strong> e <strong>JC Concursos</strong>. Você também pode disparar uma varredura manual instantânea.
+                        </p>
+                    </div>
+
+                    <button id="btn-trigger-scrape" onclick="triggerScrape()" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 rounded-xl transition-all shadow-lg shadow-purple-600/20 flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-bolt"></i> Varrer Concursos Agora
+                    </button>
+                </div>
+            </div>
+
+            <!-- Detected Concursos List Panel -->
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                    <div>
+                        <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-list text-brand-500"></i> Concursos Encontrados
+                        </h2>
+                        <p class="text-xs text-slate-400">Editais e notícias filtrados com base nas suas cidades cadastradas</p>
+                    </div>
+
+                    <!-- Search / Filter bar -->
+                    <div class="flex gap-3">
+                        <input type="text" id="search-concursos" onkeyup="filterConcursos()" placeholder="Filtrar por título ou cidade..."
+                               class="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500">
+                    </div>
+                </div>
+
+                <!-- Table Container -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm text-slate-300">
+                        <thead class="bg-slate-900/80 text-xs uppercase text-slate-400 border-b border-slate-700">
+                            <tr>
+                                <th class="py-3.5 px-4 font-semibold">Título / Órgão</th>
+                                <th class="py-3.5 px-4 font-semibold">Cidade / UF</th>
+                                <th class="py-3.5 px-4 font-semibold">Vagas / Salário</th>
+                                <th class="py-3.5 px-4 font-semibold">Fonte</th>
+                                <th class="py-3.5 px-4 font-semibold text-right">Ação</th>
+                            </tr>
+                        </thead>
+                        <tbody id="concursos-tbody" class="divide-y divide-slate-700/60">
+                            <tr>
+                                <td colspan="5" class="py-8 text-center text-slate-500">
+                                    Nenhum concurso encontrado. Adicione cidades de interesse e execute o Scraper.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= TAB 2: EDITAL VERTICALIZADO & ESTUDOS ================= -->
+        <section id="tab-studies" class="tab-content hidden space-y-8">
+            
+            <!-- Position Header & Creation -->
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                    <div>
+                        <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-clipboard-list text-blue-400"></i> Edital Verticalizado por Cargo
+                        </h2>
+                        <p class="text-xs text-slate-400">Organize o conteúdo programático por disciplinas e acompanhe seu progresso de leitura e questões</p>
+                    </div>
+
+                    <!-- Add Position Form -->
+                    <form onsubmit="handleAddPosition(event)" class="flex gap-2">
+                        <input type="text" id="input-pos-name" placeholder="Nome do Cargo (ex: Analista de TI)" required
+                               class="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+                        <input type="text" id="input-pos-exam" placeholder="Concurso / Órgão (opcional)"
+                               class="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-lg shadow-blue-600/20 whitespace-nowrap">
+                            <i class="fa-solid fa-plus"></i> Novo Cargo
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Position Selector Pills -->
+                <div id="position-tabs" class="flex flex-wrap gap-2 border-b border-slate-700 pb-4">
+                    <span class="text-xs text-slate-500">Nenhum cargo cadastrado. Crie um cargo acima para começar.</span>
+                </div>
+            </div>
+
+            <!-- Position Detail Container (Shown when position is selected) -->
+            <div id="position-detail" class="hidden space-y-6">
+                
+                <!-- Position Info Header -->
+                <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                        <h3 id="current-pos-title" class="text-2xl font-bold text-white">Cargo</h3>
+                        <p id="current-pos-exam" class="text-xs text-slate-400">Concurso</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button onclick="openAddSubjectModal()" class="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-lg">
+                            <i class="fa-solid fa-folder-plus"></i> Nova Disciplina
+                        </button>
+                        <button onclick="handleDeleteCurrentPosition()" class="bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 border border-rose-500/30 px-3 py-2 rounded-xl text-sm transition-all">
+                            <i class="fa-solid fa-trash"></i> Excluir Cargo
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Subjects Accordion / List Container -->
+                <div id="subjects-container" class="space-y-6">
+                    <!-- Dynamic subjects rendered here -->
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= TAB 3: CENTRAL DE ALERTAS TELEGRAM ================= -->
+        <section id="tab-telegram" class="tab-content hidden space-y-8">
+            <div class="max-w-3xl mx-auto bg-slate-800 border border-slate-700/80 rounded-2xl p-8 shadow-xl">
+                <div class="flex items-center gap-4 mb-6">
+                    <div class="p-3 bg-sky-500/10 text-sky-400 rounded-2xl text-3xl">
+                        <i class="fa-brands fa-telegram"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-bold text-white">Configuração do Bot do Telegram</h2>
+                        <p class="text-xs text-slate-400">Receba notificações automáticas no seu celular assim que um novo concurso for rastreado</p>
+                    </div>
+                </div>
+
+                <!-- Config Form -->
+                <form onsubmit="handleSaveTelegram(event)" class="space-y-5">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Telegram Bot Token</label>
+                        <input type="password" id="tg-token" placeholder="Ex: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ" required
+                               class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 font-mono">
+                        <p class="text-[11px] text-slate-500 mt-1">Obtido ao conversar com o <strong>@BotFather</strong> no Telegram.</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Chat ID</label>
+                        <input type="text" id="tg-chat-id" placeholder="Ex: 987654321 ou -100123456789" required
+                               class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 font-mono">
+                        <p class="text-[11px] text-slate-500 mt-1">Descubra seu Chat ID enviando qualquer mensagem para o <strong>@userinfobot</strong>.</p>
+                    </div>
+
+                    <div class="flex items-center gap-3 pt-2">
+                        <input type="checkbox" id="tg-enabled" class="w-4 h-4 rounded text-sky-500 focus:ring-sky-500 bg-slate-900 border-slate-700">
+                        <label for="tg-enabled" class="text-sm font-medium text-slate-300">Ativar envio automático de alertas via Telegram</label>
+                    </div>
+
+                    <div class="flex items-center gap-4 pt-4 border-t border-slate-700">
+                        <button type="submit" class="bg-sky-600 hover:bg-sky-700 text-white font-medium px-6 py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-sky-600/20">
+                            <i class="fa-solid fa-floppy-disk"></i> Salvar Configurações
+                        </button>
+                        <button type="button" onclick="testTelegramMessage()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium px-5 py-2.5 rounded-xl text-sm transition-all border border-slate-600">
+                            <i class="fa-solid fa-paper-plane"></i> Enviar Mensagem de Teste
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Modal Adicionar Disciplina -->
+    <div id="modal-subject" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <h3 class="text-lg font-bold text-white mb-4">Adicionar Nova Disciplina</h3>
+            <form onsubmit="handleAddSubject(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs text-slate-400 uppercase mb-1">Nome da Disciplina</label>
+                    <input type="text" id="input-sub-name" placeholder="Ex: Direito Administrativo" required
+                           class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-brand-500">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 uppercase mb-1">Peso da Disciplina no Edital</label>
+                    <input type="number" id="input-sub-weight" value="1.0" step="0.1" min="0.1" required
+                           class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-brand-500">
+                </div>
+                <div class="flex justify-end gap-3 pt-2">
+                    <button type="button" onclick="closeAddSubjectModal()" class="px-4 py-2 text-sm text-slate-400 hover:text-white">Cancelar</button>
+                    <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white px-5 py-2 rounded-xl text-sm font-medium">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Script JS Principal -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

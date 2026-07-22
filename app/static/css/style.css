@@ -1,0 +1,38 @@
+/* Style customizations for Concurso Monitor */
+
+.tab-btn.active {
+    background-color: rgba(30, 41, 59, 0.9);
+    color: #ffffff;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+    border: 1px solid rgba(51, 65, 85, 0.8);
+}
+
+.tab-btn:not(.active) {
+    color: #94a3b8;
+}
+
+.tab-btn:not(.active):hover {
+    color: #f1f5f9;
+    background-color: rgba(30, 41, 59, 0.4);
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+}
+
+/* Progress bar transition */
+.progress-bar-inner {
+    transition: width 0.4s ease-in-out;
+}

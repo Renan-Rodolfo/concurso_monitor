@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  concurso-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: concurso_monitor
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:///./data/concursos.db
+      - SCRAPER_CRON_HOUR=7
+      - SCRAPER_CRON_MINUTE=0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/cities"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
