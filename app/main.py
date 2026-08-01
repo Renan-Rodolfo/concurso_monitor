@@ -88,6 +88,36 @@ class TopicUpdate(BaseModel):
     questions_correct: Optional[int] = 0
     notes: Optional[str] = None
 
+class CandidateProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    headline: Optional[str] = None
+    location: Optional[str] = None
+    primary_skills: Optional[str] = None
+    secondary_skills: Optional[str] = None
+    experience_summary: Optional[str] = None
+    target_roles: Optional[str] = None
+    dealbreakers: Optional[str] = None
+
+class JobSearchQueryCreate(BaseModel):
+    role_title: str
+    location: Optional[str] = "Remoto"
+    work_model: Optional[str] = "Remoto"
+
+class JobOpportunityCreate(BaseModel):
+    title: str
+    company: str
+    location: Optional[str] = "Remoto"
+    work_model: Optional[str] = "Remoto"
+    salary: Optional[str] = None
+    link: Optional[str] = None
+    description: Optional[str] = None
+    skills_required: Optional[str] = None
+    notes: Optional[str] = None
+
+class JobOpportunityUpdateStatus(BaseModel):
+    status: str
+    notes: Optional[str] = None
+
 # --- ROTAS PRINCIPAIS DE TEMPLATES ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -306,6 +336,168 @@ def delete_topic(topic_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success"}
 
+# --- HELPER FUNCTION: FIT CALCULATOR ---
+
+def calculate_job_fit_score(skills_required: str, profile: Optional[models.CandidateProfile]) -> float:
+    if not profile or not skills_required:
+        return 50.0
+    
+    cand_skills = []
+    if profile.primary_skills:
+        cand_skills.extend([s.strip().lower() for s in profile.primary_skills.split(",") if s.strip()])
+    if profile.secondary_skills:
+        cand_skills.extend([s.strip().lower() for s in profile.secondary_skills.split(",") if s.strip()])
+    
+    if not cand_skills:
+        return 50.0
+
+    req_skills = [s.strip().lower() for s in skills_required.split(",") if s.strip()]
+    if not req_skills:
+        text = skills_required.lower()
+        matched = sum(1 for skill in cand_skills if skill in text)
+        return min(100.0, round((matched / len(cand_skills)) * 100, 1))
+
+    matches = 0
+    for req in req_skills:
+        if any(c in req or req in c for c in cand_skills):
+            matches += 1
+
+    return min(100.0, round((matches / max(1, len(req_skills))) * 100, 1))
+
+# --- ROTAS DA API: BUSCA DE VAGAS & PERFIL DO CANDIDATO ---
+
+@app.get("/api/job-search/profile")
+def get_candidate_profile(db: Session = Depends(get_db)):
+    profile = db.query(models.CandidateProfile).first()
+    if not profile:
+        profile = models.CandidateProfile(
+            full_name="",
+            headline="",
+            location="",
+            primary_skills="",
+            secondary_skills="",
+            experience_summary="",
+            target_roles="",
+            dealbreakers=""
+        )
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    return profile
+
+@app.post("/api/job-search/profile")
+def save_candidate_profile(data: CandidateProfileUpdate, db: Session = Depends(get_db)):
+    profile = db.query(models.CandidateProfile).first()
+    if not profile:
+        profile = models.CandidateProfile()
+        db.add(profile)
+
+    if data.full_name is not None: profile.full_name = data.full_name.strip()
+    if data.headline is not None: profile.headline = data.headline.strip()
+    if data.location is not None: profile.location = data.location.strip()
+    if data.primary_skills is not None: profile.primary_skills = data.primary_skills.strip()
+    if data.secondary_skills is not None: profile.secondary_skills = data.secondary_skills.strip()
+    if data.experience_summary is not None: profile.experience_summary = data.experience_summary.strip()
+    if data.target_roles is not None: profile.target_roles = data.target_roles.strip()
+    if data.dealbreakers is not None: profile.dealbreakers = data.dealbreakers.strip()
+
+    db.commit()
+    db.refresh(profile)
+
+    # Recalculate fit score for existing jobs
+    jobs = db.query(models.JobOpportunity).all()
+    for j in jobs:
+        j.fit_score = calculate_job_fit_score(j.skills_required or j.description or "", profile)
+    db.commit()
+
+    return profile
+
+@app.get("/api/job-search/queries")
+def get_job_queries(db: Session = Depends(get_db)):
+    return db.query(models.JobSearchQuery).order_by(models.JobSearchQuery.created_at.desc()).all()
+
+@app.post("/api/job-search/queries")
+def create_job_query(query_data: JobSearchQueryCreate, db: Session = Depends(get_db)):
+    clean_title = query_data.role_title.strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="Título do cargo é obrigatório")
+
+    new_query = models.JobSearchQuery(
+        role_title=clean_title,
+        location=query_data.location.strip() if query_data.location else "Remoto",
+        work_model=query_data.work_model.strip() if query_data.work_model else "Remoto"
+    )
+    db.add(new_query)
+    db.commit()
+    db.refresh(new_query)
+    return new_query
+
+@app.delete("/api/job-search/queries/{query_id}")
+def delete_job_query(query_id: int, db: Session = Depends(get_db)):
+    q = db.query(models.JobSearchQuery).filter(models.JobSearchQuery.id == query_id).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Filtro não encontrado")
+    db.delete(q)
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/api/job-search/jobs")
+def get_job_opportunities(status: Optional[str] = None, db: Session = Depends(get_db)):
+    query = db.query(models.JobOpportunity)
+    if status and status != "Todas":
+        query = query.filter(models.JobOpportunity.status == status)
+    return query.order_by(models.JobOpportunity.created_at.desc()).all()
+
+@app.post("/api/job-search/jobs")
+def create_job_opportunity(job_data: JobOpportunityCreate, db: Session = Depends(get_db)):
+    clean_title = job_data.title.strip()
+    clean_company = job_data.company.strip()
+    if not clean_title or not clean_company:
+        raise HTTPException(status_code=400, detail="Título e Empresa são obrigatórios")
+
+    profile = db.query(models.CandidateProfile).first()
+    fit_score = calculate_job_fit_score(job_data.skills_required or job_data.description or "", profile)
+
+    new_job = models.JobOpportunity(
+        title=clean_title,
+        company=clean_company,
+        location=job_data.location.strip() if job_data.location else "Remoto",
+        work_model=job_data.work_model.strip() if job_data.work_model else "Remoto",
+        salary=job_data.salary.strip() if job_data.salary else None,
+        link=job_data.link.strip() if job_data.link else None,
+        description=job_data.description.strip() if job_data.description else None,
+        skills_required=job_data.skills_required.strip() if job_data.skills_required else None,
+        fit_score=fit_score,
+        status="Nova",
+        notes=job_data.notes.strip() if job_data.notes else None
+    )
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+    return new_job
+
+@app.put("/api/job-search/jobs/{job_id}/status")
+def update_job_status(job_id: int, data: JobOpportunityUpdateStatus, db: Session = Depends(get_db)):
+    job = db.query(models.JobOpportunity).filter(models.JobOpportunity.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Vaga não encontrada")
+
+    job.status = data.status
+    if data.notes is not None:
+        job.notes = data.notes
+    db.commit()
+    db.refresh(job)
+    return job
+
+@app.delete("/api/job-search/jobs/{job_id}")
+def delete_job_opportunity(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(models.JobOpportunity).filter(models.JobOpportunity.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Vaga não encontrada")
+    db.delete(job)
+    db.commit()
+    return {"status": "success"}
+
 # --- ROTAS DA API: STATS DASHBOARD ---
 
 @app.get("/api/stats")
@@ -321,11 +513,17 @@ def get_stats(db: Session = Depends(get_db)):
     total_q_correct = sum([t.questions_correct for t in topics])
     avg_accuracy = round((total_q_correct / total_q_done) * 100, 1) if total_q_done > 0 else 0.0
 
+    jobs_count = db.query(models.JobOpportunity).count()
+    applied_count = db.query(models.JobOpportunity).filter(models.JobOpportunity.status == "Aplicado").count()
+
     return {
         "cities_count": cities_count,
         "concursos_count": concursos_count,
         "total_topics": total_topics,
         "avg_theory": avg_theory,
         "total_questions": total_q_done,
-        "avg_accuracy": avg_accuracy
+        "avg_accuracy": avg_accuracy,
+        "jobs_count": jobs_count,
+        "applied_count": applied_count
     }
+

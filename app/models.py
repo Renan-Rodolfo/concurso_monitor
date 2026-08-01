@@ -76,3 +76,46 @@ class Topic(Base):
         if self.questions_done and self.questions_done > 0:
             return round((self.questions_correct / self.questions_done) * 100, 1)
         return 0.0
+
+class CandidateProfile(Base):
+    __tablename__ = "candidate_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String(150), nullable=True)
+    headline = Column(String(255), nullable=True)
+    location = Column(String(150), nullable=True)
+    primary_skills = Column(Text, nullable=True)      # Separadas por vírgula (ex: Python, FastAPI, Docker, SQL)
+    secondary_skills = Column(Text, nullable=True)    # Separadas por vírgula (ex: Git, Linux, Tailwind)
+    experience_summary = Column(Text, nullable=True)  # Breve resumo profissional
+    target_roles = Column(Text, nullable=True)        # Cargos desejados
+    dealbreakers = Column(Text, nullable=True)        # Restrições (ex: apenas remoto/híbrido)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class JobSearchQuery(Base):
+    __tablename__ = "job_search_queries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    role_title = Column(String(150), nullable=False)
+    location = Column(String(100), default="Remoto")
+    work_model = Column(String(50), default="Remoto") # Remoto, Híbrido, Presencial
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class JobOpportunity(Base):
+    __tablename__ = "job_opportunities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    company = Column(String(150), nullable=False)
+    location = Column(String(150), default="Remoto")
+    work_model = Column(String(50), default="Remoto") # Remoto, Híbrido, Presencial
+    salary = Column(String(100), nullable=True)
+    link = Column(String(500), nullable=True)
+    description = Column(Text, nullable=True)
+    skills_required = Column(Text, nullable=True)     # Requisitos identificados
+    fit_score = Column(Float, default=0.0)             # Match % calculado
+    status = Column(String(50), default="Nova")        # Nova, CV Gerado, Aplicado, Entrevista, Aprovado, Descartado
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+

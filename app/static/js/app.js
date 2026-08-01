@@ -54,6 +54,10 @@ function switchTab(tabName) {
         loadPositions();
     } else if (tabName === 'telegram') {
         loadTelegramSettings();
+    } else if (tabName === 'jobsearch') {
+        loadCandidateProfile();
+        loadJobQueries();
+        loadJobOpportunities();
     }
 }
 
@@ -597,5 +601,306 @@ async function handleDeleteTopic(topicId) {
         }
     } catch (e) {
         showToast('Erro ao excluir tópico.', 'error');
+    }
+}
+
+// --- JOB SEARCH & CANDIDATE HUB ---
+
+let currentJobSubTab = 'profile';
+let allJobs = [];
+
+function switchJobSubTab(subTabName) {
+    currentJobSubTab = subTabName;
+    document.querySelectorAll('.job-subtab-content').forEach(c => c.classList.add('hidden'));
+    
+    ['profile', 'queries', 'board'].forEach(name => {
+        const btn = document.getElementById(`job-subtab-btn-${name}`);
+        if (btn) {
+            if (name === subTabName) {
+                btn.className = 'px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all text-white bg-slate-800 border border-slate-700 shadow';
+            } else {
+                btn.className = 'px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white';
+            }
+        }
+    });
+
+    const target = document.getElementById(`job-subtab-${subTabName}`);
+    if (target) target.classList.remove('hidden');
+
+    if (subTabName === 'profile') loadCandidateProfile();
+    else if (subTabName === 'queries') loadJobQueries();
+    else if (subTabName === 'board') loadJobOpportunities();
+}
+
+async function loadCandidateProfile() {
+    try {
+        const res = await fetch('/api/job-search/profile');
+        if (res.ok) {
+            const p = await res.json();
+            document.getElementById('job-prof-name').value = p.full_name || '';
+            document.getElementById('job-prof-headline').value = p.headline || '';
+            document.getElementById('job-prof-location').value = p.location || '';
+            document.getElementById('job-prof-primary-skills').value = p.primary_skills || '';
+            document.getElementById('job-prof-secondary-skills').value = p.secondary_skills || '';
+            document.getElementById('job-prof-target-roles').value = p.target_roles || '';
+            document.getElementById('job-prof-dealbreakers').value = p.dealbreakers || '';
+            document.getElementById('job-prof-summary').value = p.experience_summary || '';
+        }
+    } catch (e) {
+        console.error("Erro ao carregar perfil do candidato", e);
+    }
+}
+
+async function handleSaveCandidateProfile(event) {
+    event.preventDefault();
+    const payload = {
+        full_name: document.getElementById('job-prof-name').value.trim(),
+        headline: document.getElementById('job-prof-headline').value.trim(),
+        location: document.getElementById('job-prof-location').value.trim(),
+        primary_skills: document.getElementById('job-prof-primary-skills').value.trim(),
+        secondary_skills: document.getElementById('job-prof-secondary-skills').value.trim(),
+        target_roles: document.getElementById('job-prof-target-roles').value.trim(),
+        dealbreakers: document.getElementById('job-prof-dealbreakers').value.trim(),
+        experience_summary: document.getElementById('job-prof-summary').value.trim(),
+    };
+
+    try {
+        const res = await fetch('/api/job-search/profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+            showToast('Perfil do candidato salvo com sucesso!');
+        } else {
+            showToast('Erro ao salvar perfil.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao salvar perfil.', 'error');
+    }
+}
+
+async function loadJobQueries() {
+    try {
+        const res = await fetch('/api/job-search/queries');
+        if (res.ok) {
+            const queries = await res.json();
+            renderJobQueriesList(queries);
+        }
+    } catch (e) {
+        console.error("Erro ao carregar parâmetros de busca", e);
+    }
+}
+
+function renderJobQueriesList(queries) {
+    const container = document.getElementById('job-queries-list');
+    if (!queries || queries.length === 0) {
+        container.innerHTML = '<span class="text-xs text-slate-500 col-span-3">Nenhum filtro de busca cadastrado ainda.</span>';
+        return;
+    }
+
+    container.innerHTML = queries.map(q => `
+        <div class="bg-slate-900 border border-slate-700/80 rounded-xl p-4 flex items-center justify-between shadow-sm">
+            <div>
+                <div class="font-bold text-white text-sm">${q.role_title}</div>
+                <div class="text-xs text-slate-400 mt-1 flex items-center gap-2">
+                    <span><i class="fa-solid fa-location-dot text-rose-400 mr-1"></i>${q.location}</span>
+                    <span class="bg-slate-800 text-slate-300 px-2 py-0.5 rounded text-[11px] font-mono border border-slate-700">${q.work_model}</span>
+                </div>
+            </div>
+            <button onclick="handleDeleteJobQuery(${q.id})" class="text-slate-400 hover:text-rose-400 p-2" title="Excluir filtro">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+        </div>
+    `).join('');
+}
+
+async function handleAddJobQuery(event) {
+    event.preventDefault();
+    const role_title = document.getElementById('input-query-title').value.trim();
+    const location = document.getElementById('input-query-location').value.trim() || 'Remoto';
+    const work_model = document.getElementById('input-query-model').value;
+
+    if (!role_title) return;
+
+    try {
+        const res = await fetch('/api/job-search/queries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role_title, location, work_model })
+        });
+
+        if (res.ok) {
+            document.getElementById('input-query-title').value = '';
+            showToast('Filtro de busca adicionado!');
+            loadJobQueries();
+        } else {
+            showToast('Erro ao adicionar filtro.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao adicionar filtro.', 'error');
+    }
+}
+
+async function handleDeleteJobQuery(queryId) {
+    if (!confirm('Deseja excluir este filtro de busca?')) return;
+    try {
+        const res = await fetch(`/api/job-search/queries/${queryId}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Filtro excluído.');
+            loadJobQueries();
+        }
+    } catch (e) {
+        showToast('Erro ao excluir filtro.', 'error');
+    }
+}
+
+async function loadJobOpportunities() {
+    const statusSelect = document.getElementById('filter-job-status');
+    const status = statusSelect ? statusSelect.value : 'Todas';
+    try {
+        const res = await fetch(`/api/job-search/jobs?status=${encodeURIComponent(status)}`);
+        if (res.ok) {
+            allJobs = await res.json();
+            renderJobsTable(allJobs);
+        }
+    } catch (e) {
+        console.error("Erro ao carregar oportunidades de vagas", e);
+    }
+}
+
+function renderJobsTable(jobs) {
+    const tbody = document.getElementById('jobs-tbody');
+    if (!jobs || jobs.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="py-8 text-center text-slate-500">
+                    Nenhuma vaga encontrada para este filtro.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = jobs.map(j => {
+        const fitColor = j.fit_score >= 70 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                         j.fit_score >= 40 ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                         'bg-slate-500/10 text-slate-400 border-slate-500/20';
+
+        return `
+            <tr class="hover:bg-slate-800/40 transition-colors">
+                <td class="py-4 px-4">
+                    <div class="font-bold text-white text-base">${j.title}</div>
+                    <div class="text-xs text-slate-400 mt-0.5"><i class="fa-solid fa-building text-slate-500 mr-1"></i>${j.company}</div>
+                </td>
+                <td class="py-4 px-4">
+                    <div class="text-xs text-slate-300"><i class="fa-solid fa-location-dot text-rose-400 mr-1"></i>${j.location}</div>
+                    <span class="inline-block mt-1 px-2 py-0.5 text-[10px] font-mono bg-slate-900 text-slate-400 rounded border border-slate-700">${j.work_model}</span>
+                </td>
+                <td class="py-4 px-4">
+                    <div class="text-xs text-emerald-400 font-medium">${j.salary || 'Não informado'}</div>
+                    <div class="text-[11px] text-slate-400 mt-0.5 truncate max-w-xs" title="${j.skills_required || ''}">${j.skills_required || 'Sem requisitos especificados'}</div>
+                </td>
+                <td class="py-4 px-4 text-center">
+                    <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold font-mono border ${fitColor}">
+                        ${j.fit_score}% Fit
+                    </span>
+                </td>
+                <td class="py-4 px-4 text-center">
+                    <select onchange="handleUpdateJobStatus(${j.id}, this.value)" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-purple-500 font-medium">
+                        <option value="Nova" ${j.status === 'Nova' ? 'selected' : ''}>Nova</option>
+                        <option value="CV Gerado" ${j.status === 'CV Gerado' ? 'selected' : ''}>CV Gerado</option>
+                        <option value="Aplicado" ${j.status === 'Aplicado' ? 'selected' : ''}>Aplicado</option>
+                        <option value="Entrevista" ${j.status === 'Entrevista' ? 'selected' : ''}>Entrevista</option>
+                        <option value="Aprovado" ${j.status === 'Aprovado' ? 'selected' : ''}>Aprovado</option>
+                        <option value="Descartado" ${j.status === 'Descartado' ? 'selected' : ''}>Descartado</option>
+                    </select>
+                </td>
+                <td class="py-4 px-4 text-right">
+                    <div class="flex items-center justify-end gap-2">
+                        ${j.link ? `<a href="${j.link}" target="_blank" rel="noopener" class="text-slate-400 hover:text-emerald-400 p-1.5"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>` : ''}
+                        <button onclick="handleDeleteJob(${j.id})" class="text-slate-400 hover:text-rose-400 p-1.5"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function openAddJobModal() {
+    document.getElementById('modal-job').classList.remove('hidden');
+}
+
+function closeAddJobModal() {
+    document.getElementById('modal-job').classList.add('hidden');
+}
+
+async function handleAddJob(event) {
+    event.preventDefault();
+    const title = document.getElementById('input-job-title').value.trim();
+    const company = document.getElementById('input-job-company').value.trim();
+    const location = document.getElementById('input-job-location').value.trim() || 'Remoto';
+    const work_model = document.getElementById('input-job-model').value;
+    const salary = document.getElementById('input-job-salary').value.trim();
+    const link = document.getElementById('input-job-link').value.trim();
+    const skills_required = document.getElementById('input-job-skills').value.trim();
+    const notes = document.getElementById('input-job-notes').value.trim();
+
+    if (!title || !company) return;
+
+    try {
+        const res = await fetch('/api/job-search/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, company, location, work_model, salary, link, skills_required, notes })
+        });
+
+        if (res.ok) {
+            closeAddJobModal();
+            document.getElementById('input-job-title').value = '';
+            document.getElementById('input-job-company').value = '';
+            document.getElementById('input-job-link').value = '';
+            document.getElementById('input-job-skills').value = '';
+            document.getElementById('input-job-notes').value = '';
+            showToast('Oportunidade cadastrada com sucesso!');
+            loadJobOpportunities();
+        } else {
+            showToast('Erro ao cadastrar vaga.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao salvar vaga.', 'error');
+    }
+}
+
+async function handleUpdateJobStatus(jobId, newStatus) {
+    try {
+        const res = await fetch(`/api/job-search/jobs/${jobId}/status`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: newStatus })
+        });
+
+        if (res.ok) {
+            showToast(`Status da vaga atualizado para "${newStatus}"!`);
+            loadJobOpportunities();
+        } else {
+            showToast('Erro ao atualizar status.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro ao atualizar vaga.', 'error');
+    }
+}
+
+async function handleDeleteJob(jobId) {
+    if (!confirm('Deseja excluir esta vaga do painel?')) return;
+    try {
+        const res = await fetch(`/api/job-search/jobs/${jobId}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Vaga excluída.');
+            loadJobOpportunities();
+        }
+    } catch (e) {
+        showToast('Erro ao excluir vaga.', 'error');
     }
 }

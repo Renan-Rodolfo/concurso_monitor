@@ -56,6 +56,9 @@
                     <button id="tab-btn-telegram" onclick="switchTab('telegram')" class="tab-btn px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2">
                         <i class="fa-brands fa-telegram text-sky-400"></i> Central de Alertas
                     </button>
+                    <button id="tab-btn-jobsearch" onclick="switchTab('jobsearch')" class="tab-btn px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2">
+                        <i class="fa-solid fa-briefcase text-emerald-400"></i> Busca de Vagas
+                    </button>
                 </nav>
             </div>
         </div>
@@ -303,6 +306,200 @@
             </div>
         </section>
 
+        <!-- ================= TAB 4: BUSCA DE VAGAS & CANDIDATURAS ================= -->
+        <section id="tab-jobsearch" class="tab-content hidden space-y-8">
+            
+            <!-- Job Search Sub-navigation Bar -->
+            <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-4 shadow-xl flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-center gap-3">
+                    <div class="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-xl text-xl">
+                        <i class="fa-solid fa-briefcase"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-lg font-bold text-white">Central de Busca de Vagas</h2>
+                        <p class="text-xs text-slate-400">Gerenciador gráfico de perfil do candidato, preferências de busca e oportunidades</p>
+                    </div>
+                </div>
+
+                <!-- Sub-tabs nav -->
+                <div class="flex gap-2 bg-slate-900/80 p-1 rounded-xl border border-slate-700/80">
+                    <button id="job-subtab-btn-profile" onclick="switchJobSubTab('profile')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all text-white bg-slate-800 border border-slate-700 shadow">
+                        <i class="fa-solid fa-user-gear mr-1 text-emerald-400"></i> Perfil do Candidato
+                    </button>
+                    <button id="job-subtab-btn-queries" onclick="switchJobSubTab('queries')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">
+                        <i class="fa-solid fa-sliders mr-1 text-blue-400"></i> Filtros & Buscas
+                    </button>
+                    <button id="job-subtab-btn-board" onclick="switchJobSubTab('board')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">
+                        <i class="fa-solid fa-table-columns mr-1 text-purple-400"></i> Board de Vagas
+                    </button>
+                </div>
+            </div>
+
+            <!-- SUB-TAB 1: PERFIL DO CANDIDATO & INSUMOS -->
+            <div id="job-subtab-profile" class="job-subtab-content block space-y-6">
+                <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+                    <div class="flex items-center justify-between mb-6 pb-4 border-b border-slate-700">
+                        <div>
+                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                                <i class="fa-solid fa-id-card text-emerald-400"></i> Insumos do Candidato (Perfil Profissional)
+                            </h3>
+                            <p class="text-xs text-slate-400">Estes dados são utilizados para calcular a compatibilidade (Fit Score) e direcionar a busca de vagas</p>
+                        </div>
+                    </div>
+
+                    <form onsubmit="handleSaveCandidateProfile(event)" class="space-y-6">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Nome Completo</label>
+                                <input type="text" id="job-prof-name" placeholder="Seu nome"
+                                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Headline / Cargo Atual</label>
+                                <input type="text" id="job-prof-headline" placeholder="Ex: Engenheiro de Software Senior"
+                                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Localização & Mobilidade</label>
+                                <input type="text" id="job-prof-location" placeholder="Ex: Campinas, SP (Apenas Remoto ou Híbrido)"
+                                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Habilidades Principais (Hard Skills)</label>
+                                <input type="text" id="job-prof-primary-skills" placeholder="Ex: Python, FastAPI, Docker, SQL, PostgreSQL, Git"
+                                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+                                <p class="text-[11px] text-slate-500 mt-1">Separe por vírgulas. Usado para o cálculo automático de Fit Score.</p>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Habilidades Secundárias & Ferramentas</label>
+                                <input type="text" id="job-prof-secondary-skills" placeholder="Ex: Linux, AWS, Tailwind, CI/CD, Redis"
+                                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+                                <p class="text-[11px] text-slate-500 mt-1">Separe por vírgulas.</p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Cargos Desejados / Alvo</label>
+                                <input type="text" id="job-prof-target-roles" placeholder="Ex: Backend Developer, Python Developer, Tech Lead"
+                                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Restrições & Deal-breakers</label>
+                                <input type="text" id="job-prof-dealbreakers" placeholder="Ex: Sem viagens frequentes, Modelo Presencial fora da região"
+                                       class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Resumo Profissional & Destaques de Experiência</label>
+                            <textarea id="job-prof-summary" rows="3" placeholder="Breve resumo da sua trajetória profissional, principais projetos e conquistas relevantes..."
+                                      class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"></textarea>
+                        </div>
+
+                        <div class="flex justify-end pt-2">
+                            <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-6 py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2">
+                                <i class="fa-solid fa-floppy-disk"></i> Salvar Insumos do Perfil
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- SUB-TAB 2: FILTROS & PARÂMETROS DE BUSCA -->
+            <div id="job-subtab-queries" class="job-subtab-content hidden space-y-6">
+                <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                                <i class="fa-solid fa-sliders text-blue-400"></i> Parâmetros de Pesquisa de Vagas
+                            </h3>
+                            <p class="text-xs text-slate-400">Cadastre os termos e localidades que você deseja monitorar nos portais de emprego</p>
+                        </div>
+                    </div>
+
+                    <!-- Add Query Form -->
+                    <form onsubmit="handleAddJobQuery(event)" class="flex flex-col md:flex-row gap-3 mb-6">
+                        <input type="text" id="input-query-title" placeholder="Ex: Desenvolvedor Python, Engenheiro de Dados..." required
+                               class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+                        <input type="text" id="input-query-location" placeholder="Localização (Ex: Brasil, São Paulo, Remoto)" value="Remoto"
+                               class="w-full md:w-56 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+                        <select id="input-query-model" class="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
+                            <option value="Remoto">Remoto</option>
+                            <option value="Híbrido">Híbrido</option>
+                            <option value="Presencial">Presencial</option>
+                            <option value="Todos">Qualquer Modelo</option>
+                        </select>
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-5 py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-blue-600/20 whitespace-nowrap">
+                            <i class="fa-solid fa-plus"></i> Adicionar Filtro
+                        </button>
+                    </form>
+
+                    <!-- Active Queries List -->
+                    <div id="job-queries-list" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <span class="text-xs text-slate-500 col-span-3">Nenhum filtro de busca cadastrado ainda.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SUB-TAB 3: BOARD DE OPORTUNIDADES (JOB BOARD) -->
+            <div id="job-subtab-board" class="job-subtab-content hidden space-y-6">
+                <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                        <div>
+                            <h3 class="text-xl font-bold text-white flex items-center gap-2">
+                                <i class="fa-solid fa-table-columns text-purple-400"></i> Painel de Oportunidades Encontradas
+                            </h3>
+                            <p class="text-xs text-slate-400">Gerencie e acompanhe o status das suas candidaturas e a compatibilidade de perfil (Fit Match %)</p>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-3">
+                            <select id="filter-job-status" onchange="loadJobOpportunities()" class="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-500">
+                                <option value="Todas">Todos os Status</option>
+                                <option value="Nova">Nova</option>
+                                <option value="CV Gerado">CV Gerado</option>
+                                <option value="Aplicado">Aplicado</option>
+                                <option value="Entrevista">Entrevista</option>
+                                <option value="Aprovado">Aprovado</option>
+                                <option value="Descartado">Descartado</option>
+                            </select>
+
+                            <button onclick="openAddJobModal()" class="bg-purple-600 hover:bg-purple-700 text-white font-medium px-4 py-2 rounded-xl text-xs transition-all shadow-lg shadow-purple-600/20 flex items-center gap-1.5">
+                                <i class="fa-solid fa-plus"></i> Inserir Vaga Manual
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Job Opportunities Table -->
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm text-slate-300">
+                            <thead class="bg-slate-900/80 text-xs uppercase text-slate-400 border-b border-slate-700">
+                                <tr>
+                                    <th class="py-3.5 px-4 font-semibold">Cargo / Empresa</th>
+                                    <th class="py-3.5 px-4 font-semibold">Local / Modelo</th>
+                                    <th class="py-3.5 px-4 font-semibold">Salário / Requisitos</th>
+                                    <th class="py-3.5 px-4 font-semibold text-center">Fit Score %</th>
+                                    <th class="py-3.5 px-4 font-semibold text-center">Status Candidatura</th>
+                                    <th class="py-3.5 px-4 font-semibold text-right">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jobs-tbody" class="divide-y divide-slate-700/60">
+                                <tr>
+                                    <td colspan="6" class="py-8 text-center text-slate-500">
+                                        Nenhuma vaga cadastrada. Clique em "Inserir Vaga Manual" para registrar uma oportunidade.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
     </main>
 
     <!-- Modal Adicionar Disciplina -->
@@ -323,6 +520,74 @@
                 <div class="flex justify-end gap-3 pt-2">
                     <button type="button" onclick="closeAddSubjectModal()" class="px-4 py-2 text-sm text-slate-400 hover:text-white">Cancelar</button>
                     <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white px-5 py-2 rounded-xl text-sm font-medium">Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Inserir Vaga Manual -->
+    <div id="modal-job" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl space-y-4">
+            <div class="flex justify-between items-center pb-2 border-b border-slate-700">
+                <h3 class="text-lg font-bold text-white">Cadastrar Oportunidade de Vaga</h3>
+                <button onclick="closeAddJobModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form onsubmit="handleAddJob(event)" class="space-y-4">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-slate-400 uppercase mb-1">Título do Cargo</label>
+                        <input type="text" id="input-job-title" placeholder="Ex: Desenvolvedor Senior Python" required
+                               class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 uppercase mb-1">Empresa</label>
+                        <input type="text" id="input-job-company" placeholder="Ex: Tech Corp" required
+                               class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-xs text-slate-400 uppercase mb-1">Localização</label>
+                        <input type="text" id="input-job-location" value="Remoto" placeholder="Ex: São Paulo"
+                               class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 uppercase mb-1">Modelo</label>
+                        <select id="input-job-model" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                            <option value="Remoto">Remoto</option>
+                            <option value="Híbrido">Híbrido</option>
+                            <option value="Presencial">Presencial</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 uppercase mb-1">Salário</label>
+                        <input type="text" id="input-job-salary" placeholder="Ex: R$ 12.000"
+                               class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs text-slate-400 uppercase mb-1">Link da Vaga</label>
+                    <input type="url" id="input-job-link" placeholder="https://..."
+                           class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                </div>
+
+                <div>
+                    <label class="block text-xs text-slate-400 uppercase mb-1">Requisitos & Competências Exigidas (separados por vírgula)</label>
+                    <input type="text" id="input-job-skills" placeholder="Ex: Python, FastAPI, Docker, PostgreSQL, AWS"
+                           class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                </div>
+
+                <div>
+                    <label class="block text-xs text-slate-400 uppercase mb-1">Notas / Descrição Resumida</label>
+                    <textarea id="input-job-notes" rows="2" placeholder="Observações sobre a vaga, diferenciais..."
+                              class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white focus:outline-none focus:border-purple-500"></textarea>
+                </div>
+
+                <div class="flex justify-end gap-3 pt-2">
+                    <button type="button" onclick="closeAddJobModal()" class="px-4 py-2 text-sm text-slate-400 hover:text-white">Cancelar</button>
+                    <button type="submit" class="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded-xl text-sm font-medium">Salvar Vaga</button>
                 </div>
             </form>
         </div>
