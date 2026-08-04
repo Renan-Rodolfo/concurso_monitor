@@ -919,6 +919,28 @@ async function runLiveJobSearch() {
     const summary = document.getElementById('live-search-summary');
     const resultsGrid = document.getElementById('live-search-results');
 
+    // Coletar filtros do painel
+    const countryRaw = (document.getElementById('live-filter-country')?.value || '').trim();
+    const workMode = (document.getElementById('live-filter-workmode')?.value || '').trim() || null;
+    const jobageRaw = (document.getElementById('live-filter-jobage')?.value || '').trim();
+
+    // Separar país de região (valores prefixados com __)
+    let country = null;
+    let region = null;
+    if (countryRaw.startsWith('__')) {
+        region = countryRaw.replace('__', '');  // ex: "__latam" → "latam"
+    } else if (countryRaw) {
+        country = countryRaw;                    // ex: "br"
+    }
+
+    const searchBody = {
+        country: country,
+        region: region,
+        work_mode: workMode || null,
+        jobage: jobageRaw ? parseInt(jobageRaw) : null,
+        limit: 25
+    };
+
     // Reset state
     btn.disabled = true;
     btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Buscando...';
@@ -930,7 +952,11 @@ async function runLiveJobSearch() {
     resultsGrid.innerHTML = '';
 
     try {
-        const res = await fetch('/api/job-search/search-live', { method: 'POST' });
+        const res = await fetch('/api/job-search/search-live', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(searchBody)
+        });
         const data = await res.json();
 
         loader.classList.add('hidden');
@@ -944,17 +970,19 @@ async function runLiveJobSearch() {
         liveSearchResults = data.results || [];
 
         if (liveSearchResults.length === 0) {
+            const countryLabel = country ? `país "${country.toUpperCase()}"` : region ? `região "${region}"` : 'filtros selecionados';
             document.getElementById('live-search-error-msg').textContent =
-                'Nenhuma vaga encontrada para os seus filtros. Tente ajustar os critérios na aba "Filtros & Buscas".';
+                `Nenhuma vaga encontrada para ${countryLabel}. Tente ampliar os filtros (ex: remova o filtro de país ou modalidade).`;
             errorBox.classList.remove('hidden');
             return;
         }
 
         // Show summary bar
+        const countryBadge = country ? ` · ${country.toUpperCase()}` : region ? ` · ${region.toUpperCase()}` : ' · Global';
         document.getElementById('live-results-count').textContent = liveSearchResults.length;
         const now = new Date();
         document.getElementById('live-search-timestamp').textContent =
-            `Última busca: ${now.toLocaleTimeString('pt-BR')}`;
+            `${now.toLocaleTimeString('pt-BR')}${countryBadge}`;
 
         summary.classList.remove('hidden');
         resultsGrid.classList.remove('hidden');
@@ -968,9 +996,10 @@ async function runLiveJobSearch() {
         console.error('Live search error:', e);
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-chart"></i> Buscar Vagas Compatíveis';
+        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-chart"></i> Buscar Vagas';
     }
 }
+
 
 function sortLiveResults() {
     const sortBy = document.getElementById('live-sort-select').value;

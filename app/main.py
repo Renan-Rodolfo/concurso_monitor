@@ -537,8 +537,17 @@ def save_job_from_search(job_data: JobOpportunityCreate, db: Session = Depends(g
 
 # --- ROTA: BUSCA AO VIVO DE VAGAS (freehire.dev) ---
 
+class LiveSearchParams(BaseModel):
+    country: Optional[str] = None      # ISO-3166 alpha-2, ex: "br", "us", "de" — None = global
+    region: Optional[str] = None       # "latam", "eu", "us", "apac", "global"
+    work_mode: Optional[str] = None    # "remote", "hybrid", "onsite" — None = qualquer
+    jobage: Optional[int] = None       # Vagas dos últimos N dias — None = todas
+    limit: Optional[int] = 25
+
 @app.post("/api/job-search/search-live")
-async def search_live_jobs(db: Session = Depends(get_db)):
+async def search_live_jobs(params: LiveSearchParams = None, db: Session = Depends(get_db)):
+    if params is None:
+        params = LiveSearchParams()
     """
     Busca vagas ao vivo na API pública do freehire.dev usando os filtros
     cadastrados pelo candidato e calcula o Fit Score com base no perfil.
@@ -565,7 +574,6 @@ async def search_live_jobs(db: Session = Depends(get_db)):
     seen_ids = set()
 
     freehire_base = "https://freehire.dev"
-    # Endpoint correto conforme url-reference.md
     search_url = f"{freehire_base}/api/v1/jobs/search"
 
     async with httpx.AsyncClient(
@@ -578,26 +586,38 @@ async def search_live_jobs(db: Session = Depends(get_db)):
     ) as client:
         for q in queries_data[:5]:  # Máximo 5 filtros por rodada
             try:
-                params: dict = {
+                api_params: dict = {
                     "q": q["role_title"],
-                    "limit": 25,
+                    "limit": params.limit or 25,
                     "offset": 0,
-                    "semantic_ratio": 0,  # busca por palavra-chave, não semântica
+                    "semantic_ratio": 0,
                 }
 
-                # Filtro de modelo de trabalho — somente se explicitamente remoto/híbrido
-                # Evita filtro muito restritivo para "Todos" ou "Qualquer"
-                work_model_raw = (q.get("work_model") or "").lower()
-                if "remoto" in work_model_raw or work_model_raw == "remote":
-                    params["work_mode"] = "remote"
-                elif "híbrido" in work_model_raw or "hibrido" in work_model_raw or "hybrid" in work_model_raw:
-                    params["work_mode"] = "hybrid"
-                elif "presencial" in work_model_raw or "onsite" in work_model_raw:
-                    params["work_mode"] = "onsite"
-                # Se for "Todos" ou "Qualquer Modelo", não aplica filtro work_mode
+                # Filtro de país — prioridade dos params da request, senão usa localização do filtro
+                if params.country:
+                    api_params["countries"] = params.country.lower()
+                elif params.region:
+                    api_params["regions"] = params.region.lower()
 
-                logger.info(f"freehire.dev search: {search_url} params={params}")
-                resp = await client.get(search_url, params=params)
+                # Filtro de modelo de trabalho
+                if params.work_mode:
+                    api_params["work_mode"] = params.work_mode
+                else:
+                    work_model_raw = (q.get("work_model") or "").lower()
+                    if "remoto" in work_model_raw or work_model_raw == "remote":
+                        api_params["work_mode"] = "remote"
+                    elif "híbrido" in work_model_raw or "hibrido" in work_model_raw:
+                        api_params["work_mode"] = "hybrid"
+                    elif "presencial" in work_model_raw or "onsite" in work_model_raw:
+                        api_params["work_mode"] = "onsite"
+                    # "Todos" = sem filtro de work_mode
+
+                # Filtro de recência
+                if params.jobage:
+                    api_params["posted_within_days"] = params.jobage
+
+                logger.info(f"freehire.dev search: {search_url} api_params={api_params}")
+                resp = await client.get(search_url, params=api_params)
                 logger.info(f"freehire.dev response: {resp.status_code} for query='{q['role_title']}'")
 
                 if resp.status_code != 200:
@@ -605,8 +625,8 @@ async def search_live_jobs(db: Session = Depends(get_db)):
                     continue
 
                 payload = resp.json()
-                # Envelope: { "data": [...], "meta": {...} }
                 results = payload.get("data") or []
+
 
                 for job in results:
                     # public_slug é o identificador estável (não há "id" numérico exposto)
