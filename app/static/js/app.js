@@ -904,3 +904,236 @@ async function handleDeleteJob(jobId) {
         showToast('Erro ao excluir vaga.', 'error');
     }
 }
+
+// ============================================================
+// LIVE JOB SEARCH
+// ============================================================
+
+let liveSearchResults = [];
+
+async function runLiveJobSearch() {
+    const btn = document.getElementById('btn-search-live');
+    const loader = document.getElementById('live-search-loader');
+    const errorBox = document.getElementById('live-search-error');
+    const idle = document.getElementById('live-search-idle');
+    const summary = document.getElementById('live-search-summary');
+    const resultsGrid = document.getElementById('live-search-results');
+
+    // Reset state
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Buscando...';
+    loader.classList.remove('hidden');
+    errorBox.classList.add('hidden');
+    idle.classList.add('hidden');
+    summary.classList.add('hidden');
+    resultsGrid.classList.add('hidden');
+    resultsGrid.innerHTML = '';
+
+    try {
+        const res = await fetch('/api/job-search/search-live', { method: 'POST' });
+        const data = await res.json();
+
+        loader.classList.add('hidden');
+
+        if (!res.ok) {
+            document.getElementById('live-search-error-msg').textContent = data.detail || 'Erro inesperado ao buscar vagas.';
+            errorBox.classList.remove('hidden');
+            return;
+        }
+
+        liveSearchResults = data.results || [];
+
+        if (liveSearchResults.length === 0) {
+            document.getElementById('live-search-error-msg').textContent =
+                'Nenhuma vaga encontrada para os seus filtros. Tente ajustar os critérios na aba "Filtros & Buscas".';
+            errorBox.classList.remove('hidden');
+            return;
+        }
+
+        // Show summary bar
+        document.getElementById('live-results-count').textContent = liveSearchResults.length;
+        const now = new Date();
+        document.getElementById('live-search-timestamp').textContent =
+            `Última busca: ${now.toLocaleTimeString('pt-BR')}`;
+
+        summary.classList.remove('hidden');
+        resultsGrid.classList.remove('hidden');
+        renderLiveResults(liveSearchResults);
+
+    } catch (e) {
+        loader.classList.add('hidden');
+        document.getElementById('live-search-error-msg').textContent =
+            'Falha na conexão com o servidor. Verifique sua conexão e tente novamente.';
+        errorBox.classList.remove('hidden');
+        console.error('Live search error:', e);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-chart"></i> Buscar Vagas Compatíveis';
+    }
+}
+
+function sortLiveResults() {
+    const sortBy = document.getElementById('live-sort-select').value;
+    const sorted = [...liveSearchResults];
+    if (sortBy === 'fit') {
+        sorted.sort((a, b) => b.fit_score - a.fit_score);
+    } else if (sortBy === 'title') {
+        sorted.sort((a, b) => a.title.localeCompare(b.title));
+    } else if (sortBy === 'company') {
+        sorted.sort((a, b) => a.company.localeCompare(b.company));
+    }
+    renderLiveResults(sorted);
+}
+
+function fitScoreBadgeClass(score) {
+    if (score >= 80) return 'bg-emerald-900/60 text-emerald-300 border-emerald-700/50';
+    if (score >= 55) return 'bg-sky-900/60 text-sky-300 border-sky-700/50';
+    if (score >= 30) return 'bg-yellow-900/60 text-yellow-300 border-yellow-700/50';
+    return 'bg-slate-700/60 text-slate-400 border-slate-600/50';
+}
+
+function fitScoreBarColor(score) {
+    if (score >= 80) return 'bg-emerald-500';
+    if (score >= 55) return 'bg-sky-500';
+    if (score >= 30) return 'bg-yellow-500';
+    return 'bg-slate-500';
+}
+
+function seniorityLabel(s) {
+    const map = { junior: 'Júnior', middle: 'Pleno', senior: 'Sênior', lead: 'Lead', staff: 'Staff', principal: 'Principal' };
+    return map[s] || s;
+}
+
+function renderLiveResults(results) {
+    const grid = document.getElementById('live-search-results');
+    grid.innerHTML = results.map((job, idx) => {
+        const score = job.fit_score || 0;
+        const badgeClass = fitScoreBadgeClass(score);
+        const barColor = fitScoreBarColor(score);
+        const skills = (job.skills_required || '').split(',').filter(s => s.trim()).slice(0, 5);
+        const postedDate = job.posted_at ? new Date(job.posted_at).toLocaleDateString('pt-BR') : '';
+        const seniority = job.seniority ? `<span class="text-xs bg-indigo-900/50 text-indigo-300 border border-indigo-700/40 px-2 py-0.5 rounded-full">${seniorityLabel(job.seniority)}</span>` : '';
+
+        return `
+        <div class="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4 flex flex-col gap-3 hover:border-sky-700/60 hover:shadow-lg hover:shadow-sky-900/20 transition-all group" data-idx="${idx}">
+            <!-- Header: Fit + source -->
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex-1 min-w-0">
+                    <p class="font-semibold text-white text-sm leading-tight line-clamp-2 group-hover:text-sky-300 transition-colors">${job.title}</p>
+                    <p class="text-slate-400 text-xs mt-0.5 truncate">${job.company}</p>
+                </div>
+                <span class="border text-xs font-bold px-2.5 py-1 rounded-xl whitespace-nowrap flex-shrink-0 ${badgeClass}">
+                    ${score.toFixed(0)}% fit
+                </span>
+            </div>
+
+            <!-- Fit bar -->
+            <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                <div class="${barColor} h-1.5 rounded-full transition-all" style="width: ${score}%"></div>
+            </div>
+
+            <!-- Meta row -->
+            <div class="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                <span><i class="fa-solid fa-location-dot mr-1 text-slate-600"></i>${job.location || 'N/A'}</span>
+                <span class="text-slate-700">·</span>
+                <span class="capitalize">${job.work_model || 'Remoto'}</span>
+                ${job.salary ? `<span class="text-slate-700">·</span><span class="text-emerald-400">${job.salary}</span>` : ''}
+                ${postedDate ? `<span class="text-slate-700">·</span><span>${postedDate}</span>` : ''}
+            </div>
+
+            <!-- Seniority + search tag -->
+            <div class="flex flex-wrap items-center gap-1.5">
+                ${seniority}
+                <span class="text-xs bg-slate-800 text-slate-500 border border-slate-700 px-2 py-0.5 rounded-full truncate max-w-full">
+                    <i class="fa-solid fa-magnifying-glass mr-1"></i>${job.query_used || ''}
+                </span>
+            </div>
+
+            <!-- Skills tags -->
+            ${skills.length > 0 ? `
+            <div class="flex flex-wrap gap-1.5">
+                ${skills.map(s => `<span class="text-xs bg-slate-800 border border-slate-700/50 text-sky-400 px-2 py-0.5 rounded-lg">${s.trim()}</span>`).join('')}
+            </div>` : ''}
+
+            <!-- Description preview -->
+            ${job.description ? `<p class="text-xs text-slate-500 line-clamp-2 leading-relaxed">${job.description}</p>` : ''}
+
+            <!-- Actions -->
+            <div class="flex gap-2 pt-1 border-t border-slate-800 mt-auto">
+                <a href="${job.link}" target="_blank" rel="noopener noreferrer"
+                   class="flex-1 text-center bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium py-2 rounded-xl transition-all border border-slate-700/50 flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i> Ver Vaga
+                </a>
+                <button onclick="saveJobFromSearch(${idx})"
+                        id="save-btn-${idx}"
+                        class="flex-1 bg-sky-700 hover:bg-sky-600 text-white text-xs font-semibold py-2 rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm shadow-sky-900/40">
+                    <i class="fa-solid fa-bookmark"></i> Salvar no Board
+                </button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function saveJobFromSearch(idx) {
+    const job = liveSearchResults[idx];
+    if (!job) return;
+
+    const btn = document.getElementById(`save-btn-${idx}`);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Salvando...';
+    }
+
+    try {
+        const res = await fetch('/api/job-search/jobs/save-from-search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: job.title,
+                company: job.company,
+                location: job.location,
+                work_model: job.work_model,
+                salary: job.salary || '',
+                link: job.link,
+                description: job.description,
+                skills_required: job.skills_required,
+                notes: `Encontrada via Busca ao Vivo (freehire.dev) — filtro: "${job.query_used}"`
+            })
+        });
+
+        if (res.ok) {
+            if (btn) {
+                btn.innerHTML = '<i class="fa-solid fa-circle-check"></i> Salva!';
+                btn.classList.remove('bg-sky-700', 'hover:bg-sky-600');
+                btn.classList.add('bg-emerald-800', 'cursor-default');
+            }
+            showToast(`"${job.title}" salva no Board de Candidaturas!`);
+            loadJobOpportunities();
+        } else {
+            const err = await res.json();
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-bookmark"></i> Salvar no Board';
+            }
+            if (res.status === 400 && err.detail && err.detail.includes('já salva')) {
+                showToast('Esta vaga já está no seu Board!', 'info');
+                if (btn) {
+                    btn.innerHTML = '<i class="fa-solid fa-circle-check"></i> Já no Board';
+                    btn.classList.remove('bg-sky-700', 'hover:bg-sky-600');
+                    btn.classList.add('bg-slate-700', 'cursor-default');
+                    btn.disabled = true;
+                }
+            } else {
+                showToast('Erro ao salvar vaga no Board.', 'error');
+            }
+        }
+    } catch (e) {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-bookmark"></i> Salvar no Board';
+        }
+        showToast('Erro de conexão ao salvar vaga.', 'error');
+        console.error('Save from search error:', e);
+    }
+}
+

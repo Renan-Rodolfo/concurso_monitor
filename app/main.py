@@ -11,10 +11,13 @@ from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+import httpx
+
 from app.database import Base, engine, get_db, SessionLocal
 from app import models
 from app.scraper import run_scraper_job
 from app.telegram import send_telegram_message, get_telegram_config
+
 
 # Configuração de logs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -498,6 +501,164 @@ def delete_job_opportunity(job_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success"}
 
+# --- ROTA: SALVAR VAGA DO RESULTADO DE BUSCA NO BOARD ---
+
+@app.post("/api/job-search/jobs/save-from-search")
+def save_job_from_search(job_data: JobOpportunityCreate, db: Session = Depends(get_db)):
+    """Salva uma vaga encontrada na busca ao vivo diretamente no Board de Candidaturas."""
+    # Verificar se a vaga já foi salva (pelo link)
+    if job_data.link:
+        existing = db.query(models.JobOpportunity).filter(
+            models.JobOpportunity.link == job_data.link.strip()
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Vaga já salva no Board de Candidaturas")
+
+    profile = db.query(models.CandidateProfile).first()
+    fit_score = calculate_job_fit_score(job_data.skills_required or job_data.description or "", profile)
+
+    new_job = models.JobOpportunity(
+        title=job_data.title.strip(),
+        company=job_data.company.strip(),
+        location=job_data.location.strip() if job_data.location else "Remoto",
+        work_model=job_data.work_model.strip() if job_data.work_model else "Remoto",
+        salary=job_data.salary.strip() if job_data.salary else None,
+        link=job_data.link.strip() if job_data.link else None,
+        description=job_data.description.strip() if job_data.description else None,
+        skills_required=job_data.skills_required.strip() if job_data.skills_required else None,
+        fit_score=fit_score,
+        status="Nova",
+        notes=job_data.notes.strip() if job_data.notes else None
+    )
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+    return new_job
+
+# --- ROTA: BUSCA AO VIVO DE VAGAS (freehire.dev) ---
+
+@app.post("/api/job-search/search-live")
+async def search_live_jobs(db: Session = Depends(get_db)):
+    """
+    Busca vagas ao vivo na API pública do freehire.dev usando os filtros
+    cadastrados pelo candidato e calcula o Fit Score com base no perfil.
+    """
+    profile = db.query(models.CandidateProfile).first()
+    queries = db.query(models.JobSearchQuery).filter(models.JobSearchQuery.active == True).all()
+
+    if not queries:
+        # Se não há filtros, usa cargos alvo do perfil
+        if profile and profile.target_roles:
+            role_titles = [r.strip() for r in profile.target_roles.split(",") if r.strip()]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Configure pelo menos um filtro de busca na aba 'Filtros & Buscas' antes de pesquisar."
+            )
+        queries_data = [{"role_title": t, "location": "Remoto", "work_model": "Remoto"} for t in role_titles[:3]]
+    else:
+        queries_data = [{"role_title": q.role_title, "location": q.location, "work_model": q.work_model} for q in queries]
+
+    all_results = []
+    seen_ids = set()
+
+    freehire_base = "https://freehire.dev"
+
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        for q in queries_data[:5]:  # Máximo 5 filtros por rodada
+            try:
+                params = {
+                    "q": q["role_title"],
+                    "limit": 20,
+                    "page": 1,
+                }
+
+                # Mapear modelo de trabalho para o padrão do freehire
+                work_model = q["work_model"].lower()
+                if "remoto" in work_model or "remote" in work_model:
+                    params["work_mode"] = "remote"
+                elif "hibrido" in work_model or "híbrido" in work_model or "hybrid" in work_model:
+                    params["work_mode"] = "hybrid"
+
+                resp = await client.get(f"{freehire_base}/api/v1/jobs", params=params)
+
+                if resp.status_code != 200:
+                    logger.warning(f"freehire.dev retornou {resp.status_code} para query '{q['role_title']}'")
+                    continue
+
+                data = resp.json()
+                results = data.get("results", [])
+
+                for job in results:
+                    job_id = job.get("id") or job.get("public_slug") or ""
+                    if not job_id or job_id in seen_ids:
+                        continue
+                    seen_ids.add(job_id)
+
+                    # Extrair campos
+                    title = job.get("title") or ""
+                    company = (job.get("company") or {}).get("name") or job.get("company_name") or "Empresa não informada"
+                    job_url = job.get("url") or f"{freehire_base}/jobs/{job_id}"
+                    skills_list = job.get("skills") or []
+                    skills_str = ", ".join(skills_list) if isinstance(skills_list, list) else str(skills_list)
+                    description = job.get("description") or job.get("short_description") or ""
+                    salary = job.get("salary") or job.get("salary_range") or ""
+
+                    # Localização
+                    regions = job.get("regions") or []
+                    countries = job.get("countries") or []
+                    cities = job.get("cities") or []
+                    location_parts = cities[:1] + countries[:1] + regions[:1]
+                    location = ", ".join(location_parts) if location_parts else "Remoto/Global"
+
+                    # Modelo de trabalho
+                    raw_work_mode = job.get("work_mode") or ""
+                    if raw_work_mode == "remote":
+                        wm = "Remoto"
+                    elif raw_work_mode == "hybrid":
+                        wm = "Híbrido"
+                    elif raw_work_mode == "onsite":
+                        wm = "Presencial"
+                    else:
+                        wm = "Remoto"
+
+                    # Fit Score
+                    fit_text = skills_str if skills_str else description
+                    fit = calculate_job_fit_score(fit_text, profile)
+
+                    # Data de publicação
+                    posted_at = job.get("date") or job.get("posted_at") or ""
+
+                    all_results.append({
+                        "id": job_id,
+                        "title": title,
+                        "company": company,
+                        "location": location,
+                        "work_model": wm,
+                        "salary": str(salary) if salary else None,
+                        "link": job_url,
+                        "skills_required": skills_str,
+                        "description": description[:500] if description else "",
+                        "fit_score": fit,
+                        "posted_at": posted_at,
+                        "source": "freehire.dev",
+                        "seniority": job.get("seniority") or "",
+                        "query_used": q["role_title"],
+                    })
+
+            except Exception as e:
+                logger.error(f"Erro ao buscar no freehire.dev para '{q['role_title']}': {e}")
+                continue
+
+    # Ordenar por fit_score decrescente
+    all_results.sort(key=lambda x: x["fit_score"], reverse=True)
+
+    return {
+        "status": "success",
+        "total": len(all_results),
+        "results": all_results
+    }
+
 # --- ROTAS DA API: STATS DASHBOARD ---
 
 @app.get("/api/stats")
@@ -526,4 +687,3 @@ def get_stats(db: Session = Depends(get_db)):
         "jobs_count": jobs_count,
         "applied_count": applied_count
     }
-

@@ -447,13 +447,80 @@
 
             <!-- SUB-TAB 3: BOARD DE OPORTUNIDADES (JOB BOARD) -->
             <div id="job-subtab-board" class="job-subtab-content hidden space-y-6">
+
+                <!-- ===== LIVE SEARCH PANEL ===== -->
+                <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                        <div>
+                            <h3 class="text-xl font-bold text-white flex items-center gap-2">
+                                <i class="fa-solid fa-satellite-dish text-sky-400"></i> Busca ao Vivo de Vagas Compatíveis
+                            </h3>
+                            <p class="text-xs text-slate-400 mt-1">Pesquisa em tempo real usando seus filtros e perfil cadastrados. Powered by <a href="https://freehire.dev" target="_blank" class="text-sky-400 hover:underline">freehire.dev</a> (~50 plataformas ATS)</p>
+                        </div>
+                        <button id="btn-search-live" onclick="runLiveJobSearch()" class="bg-sky-600 hover:bg-sky-500 active:scale-95 text-white font-semibold px-6 py-3 rounded-xl text-sm transition-all shadow-lg shadow-sky-600/30 flex items-center gap-2 whitespace-nowrap">
+                            <i class="fa-solid fa-magnifying-glass-chart"></i> Buscar Vagas Compatíveis
+                        </button>
+                    </div>
+
+                    <!-- Search loading state -->
+                    <div id="live-search-loader" class="hidden py-12 flex flex-col items-center gap-4">
+                        <div class="relative w-16 h-16">
+                            <div class="absolute inset-0 rounded-full border-4 border-sky-900"></div>
+                            <div class="absolute inset-0 rounded-full border-4 border-t-sky-400 animate-spin"></div>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-sky-300 font-semibold text-sm">Pesquisando vagas compatíveis...</p>
+                            <p class="text-slate-500 text-xs mt-1">Consultando freehire.dev com seus filtros de perfil</p>
+                        </div>
+                    </div>
+
+                    <!-- Search error -->
+                    <div id="live-search-error" class="hidden bg-red-900/30 border border-red-700/60 rounded-xl p-4 text-sm text-red-300 flex items-start gap-3">
+                        <i class="fa-solid fa-circle-exclamation text-red-400 mt-0.5 flex-shrink-0"></i>
+                        <span id="live-search-error-msg"></span>
+                    </div>
+
+                    <!-- Search idle hint -->
+                    <div id="live-search-idle" class="py-10 flex flex-col items-center gap-3 text-center">
+                        <div class="w-16 h-16 rounded-2xl bg-slate-900/80 flex items-center justify-center">
+                            <i class="fa-solid fa-radar text-slate-500 text-2xl"></i>
+                        </div>
+                        <div>
+                            <p class="text-slate-400 font-medium text-sm">Nenhuma busca realizada ainda</p>
+                            <p class="text-slate-600 text-xs mt-1">Clique em <strong class="text-slate-400">Buscar Vagas Compatíveis</strong> para pesquisar vagas usando seu perfil e filtros cadastrados</p>
+                        </div>
+                    </div>
+
+                    <!-- Search results summary bar -->
+                    <div id="live-search-summary" class="hidden mb-4 flex items-center justify-between gap-3">
+                        <div class="flex items-center gap-2 text-sm">
+                            <span class="bg-sky-900/60 border border-sky-700/50 text-sky-300 px-3 py-1 rounded-full text-xs font-semibold">
+                                <i class="fa-solid fa-list-check mr-1"></i><span id="live-results-count">0</span> vagas encontradas
+                            </span>
+                            <span class="text-slate-500 text-xs" id="live-search-timestamp"></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-slate-400">Ordenar:</label>
+                            <select id="live-sort-select" onchange="sortLiveResults()" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500">
+                                <option value="fit">Maior Fit Score</option>
+                                <option value="title">Título A→Z</option>
+                                <option value="company">Empresa A→Z</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Results grid -->
+                    <div id="live-search-results" class="hidden grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+                </div>
+
+                <!-- ===== BOARD DE CANDIDATURAS ===== -->
                 <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                         <div>
                             <h3 class="text-xl font-bold text-white flex items-center gap-2">
-                                <i class="fa-solid fa-table-columns text-purple-400"></i> Painel de Oportunidades Encontradas
+                                <i class="fa-solid fa-table-columns text-purple-400"></i> Board de Candidaturas Salvas
                             </h3>
-                            <p class="text-xs text-slate-400">Gerencie e acompanhe o status das suas candidaturas e a compatibilidade de perfil (Fit Match %)</p>
+                            <p class="text-xs text-slate-400">Acompanhe o status de cada candidatura. Salve vagas encontradas acima ou insira manualmente.</p>
                         </div>
 
                         <div class="flex flex-wrap items-center gap-3">
@@ -489,7 +556,7 @@
                             <tbody id="jobs-tbody" class="divide-y divide-slate-700/60">
                                 <tr>
                                     <td colspan="6" class="py-8 text-center text-slate-500">
-                                        Nenhuma vaga cadastrada. Clique em "Inserir Vaga Manual" para registrar uma oportunidade.
+                                        Nenhuma vaga salva. Use a busca ao vivo acima ou clique em "Inserir Vaga Manual".
                                     </td>
                                 </tr>
                             </tbody>
@@ -498,7 +565,7 @@
                 </div>
             </div>
 
-        </section>
+
 
     </main>
 
