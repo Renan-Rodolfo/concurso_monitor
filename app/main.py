@@ -542,12 +542,14 @@ async def search_live_jobs(db: Session = Depends(get_db)):
     """
     Busca vagas ao vivo na API pública do freehire.dev usando os filtros
     cadastrados pelo candidato e calcula o Fit Score com base no perfil.
+    Endpoint correto: GET /api/v1/jobs/search
+    Resposta: { "data": [...], "meta": { "total", "limit", "offset" } }
     """
     profile = db.query(models.CandidateProfile).first()
     queries = db.query(models.JobSearchQuery).filter(models.JobSearchQuery.active == True).all()
 
     if not queries:
-        # Se não há filtros, usa cargos alvo do perfil
+        # Se não há filtros cadastrados, usa cargos alvo do perfil como fallback
         if profile and profile.target_roles:
             role_titles = [r.strip() for r in profile.target_roles.split(",") if r.strip()]
         else:
@@ -555,79 +557,124 @@ async def search_live_jobs(db: Session = Depends(get_db)):
                 status_code=400,
                 detail="Configure pelo menos um filtro de busca na aba 'Filtros & Buscas' antes de pesquisar."
             )
-        queries_data = [{"role_title": t, "location": "Remoto", "work_model": "Remoto"} for t in role_titles[:3]]
+        queries_data = [{"role_title": t, "work_model": "Todos"} for t in role_titles[:3]]
     else:
-        queries_data = [{"role_title": q.role_title, "location": q.location, "work_model": q.work_model} for q in queries]
+        queries_data = [{"role_title": q.role_title, "work_model": q.work_model} for q in queries]
 
     all_results = []
     seen_ids = set()
 
     freehire_base = "https://freehire.dev"
+    # Endpoint correto conforme url-reference.md
+    search_url = f"{freehire_base}/api/v1/jobs/search"
 
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=20.0,
+        follow_redirects=True,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; ConcursoMonitor/1.0)"
+        }
+    ) as client:
         for q in queries_data[:5]:  # Máximo 5 filtros por rodada
             try:
-                params = {
+                params: dict = {
                     "q": q["role_title"],
-                    "limit": 20,
-                    "page": 1,
+                    "limit": 25,
+                    "offset": 0,
+                    "semantic_ratio": 0,  # busca por palavra-chave, não semântica
                 }
 
-                # Mapear modelo de trabalho para o padrão do freehire
-                work_model = q["work_model"].lower()
-                if "remoto" in work_model or "remote" in work_model:
+                # Filtro de modelo de trabalho — somente se explicitamente remoto/híbrido
+                # Evita filtro muito restritivo para "Todos" ou "Qualquer"
+                work_model_raw = (q.get("work_model") or "").lower()
+                if "remoto" in work_model_raw or work_model_raw == "remote":
                     params["work_mode"] = "remote"
-                elif "hibrido" in work_model or "híbrido" in work_model or "hybrid" in work_model:
+                elif "híbrido" in work_model_raw or "hibrido" in work_model_raw or "hybrid" in work_model_raw:
                     params["work_mode"] = "hybrid"
+                elif "presencial" in work_model_raw or "onsite" in work_model_raw:
+                    params["work_mode"] = "onsite"
+                # Se for "Todos" ou "Qualquer Modelo", não aplica filtro work_mode
 
-                resp = await client.get(f"{freehire_base}/api/v1/jobs", params=params)
+                logger.info(f"freehire.dev search: {search_url} params={params}")
+                resp = await client.get(search_url, params=params)
+                logger.info(f"freehire.dev response: {resp.status_code} for query='{q['role_title']}'")
 
                 if resp.status_code != 200:
-                    logger.warning(f"freehire.dev retornou {resp.status_code} para query '{q['role_title']}'")
+                    logger.warning(f"freehire.dev retornou {resp.status_code}: {resp.text[:200]}")
                     continue
 
-                data = resp.json()
-                results = data.get("results", [])
+                payload = resp.json()
+                # Envelope: { "data": [...], "meta": {...} }
+                results = payload.get("data") or []
 
                 for job in results:
-                    job_id = job.get("id") or job.get("public_slug") or ""
+                    # public_slug é o identificador estável (não há "id" numérico exposto)
+                    job_id = job.get("public_slug") or job.get("id") or ""
                     if not job_id or job_id in seen_ids:
                         continue
                     seen_ids.add(job_id)
 
-                    # Extrair campos
-                    title = job.get("title") or ""
-                    company = (job.get("company") or {}).get("name") or job.get("company_name") or "Empresa não informada"
-                    job_url = job.get("url") or f"{freehire_base}/jobs/{job_id}"
-                    skills_list = job.get("skills") or []
-                    skills_str = ", ".join(skills_list) if isinstance(skills_list, list) else str(skills_list)
-                    description = job.get("description") or job.get("short_description") or ""
-                    salary = job.get("salary") or job.get("salary_range") or ""
+                    # Campos top-level
+                    title = (job.get("title") or "").strip()
+                    if not title:
+                        continue
 
-                    # Localização
+                    # company é string direta (não objeto)
+                    company = (job.get("company") or "").strip() or "Empresa não informada"
+                    job_url = job.get("url") or f"{freehire_base}/jobs/{job_id}"
+
+                    # Skills (lista de strings)
+                    skills_list = job.get("skills") or []
+                    skills_str = ", ".join(skills_list) if isinstance(skills_list, list) else ""
+
+                    # Description (HTML — limpamos o básico)
+                    raw_desc = job.get("description") or ""
+                    import re as _re
+                    clean_desc = _re.sub(r'<[^>]+>', ' ', raw_desc).strip()
+                    clean_desc = _re.sub(r'\s+', ' ', clean_desc)[:500]
+
+                    # Enrichment (seniority, category, salary ficam aqui)
+                    enrichment = job.get("enrichment") or {}
+                    seniority = enrichment.get("seniority") or ""
+                    salary_min = enrichment.get("salary_min")
+                    salary_max = enrichment.get("salary_max")
+                    salary_currency = enrichment.get("salary_currency") or ""
+                    if salary_min and salary_max:
+                        salary_str = f"{salary_currency} {salary_min:,}–{salary_max:,}".strip()
+                    elif salary_min:
+                        salary_str = f"{salary_currency} {salary_min:,}+".strip()
+                    else:
+                        salary_str = ""
+
+                    # Localização — location é campo de texto livre do ATS
+                    location_raw = (job.get("location") or "").strip()
                     regions = job.get("regions") or []
                     countries = job.get("countries") or []
                     cities = job.get("cities") or []
-                    location_parts = cities[:1] + countries[:1] + regions[:1]
-                    location = ", ".join(location_parts) if location_parts else "Remoto/Global"
+                    if location_raw:
+                        location = location_raw
+                    else:
+                        parts = cities[:1] + countries[:1] + regions[:1]
+                        location = ", ".join(parts) if parts else "Remoto/Global"
 
                     # Modelo de trabalho
-                    raw_work_mode = job.get("work_mode") or ""
-                    if raw_work_mode == "remote":
+                    raw_wm = (job.get("work_mode") or "").lower()
+                    if raw_wm == "remote":
                         wm = "Remoto"
-                    elif raw_work_mode == "hybrid":
+                    elif raw_wm == "hybrid":
                         wm = "Híbrido"
-                    elif raw_work_mode == "onsite":
+                    elif raw_wm == "onsite":
                         wm = "Presencial"
                     else:
-                        wm = "Remoto"
+                        wm = "Não informado"
 
-                    # Fit Score
-                    fit_text = skills_str if skills_str else description
+                    # Fit Score (usa skills + description)
+                    fit_text = skills_str if skills_str else clean_desc
                     fit = calculate_job_fit_score(fit_text, profile)
 
                     # Data de publicação
-                    posted_at = job.get("date") or job.get("posted_at") or ""
+                    posted_at = job.get("posted_at") or ""
 
                     all_results.append({
                         "id": job_id,
@@ -635,19 +682,19 @@ async def search_live_jobs(db: Session = Depends(get_db)):
                         "company": company,
                         "location": location,
                         "work_model": wm,
-                        "salary": str(salary) if salary else None,
+                        "salary": salary_str or None,
                         "link": job_url,
                         "skills_required": skills_str,
-                        "description": description[:500] if description else "",
+                        "description": clean_desc,
                         "fit_score": fit,
                         "posted_at": posted_at,
                         "source": "freehire.dev",
-                        "seniority": job.get("seniority") or "",
+                        "seniority": seniority,
                         "query_used": q["role_title"],
                     })
 
             except Exception as e:
-                logger.error(f"Erro ao buscar no freehire.dev para '{q['role_title']}': {e}")
+                logger.error(f"Erro ao buscar no freehire.dev para '{q['role_title']}': {e}", exc_info=True)
                 continue
 
     # Ordenar por fit_score decrescente
@@ -660,6 +707,7 @@ async def search_live_jobs(db: Session = Depends(get_db)):
     }
 
 # --- ROTAS DA API: STATS DASHBOARD ---
+
 
 @app.get("/api/stats")
 def get_stats(db: Session = Depends(get_db)):
