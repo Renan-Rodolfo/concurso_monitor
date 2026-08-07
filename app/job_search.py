@@ -86,6 +86,90 @@ _SKILL_TO_ROLE = {
     "seo": ["analista de seo", "seo analyst"],
 }
 
+# Dicionário bilíngue PT ↔ EN de cargos comuns no mercado brasileiro
+# Chave: termo em qualquer idioma → lista de equivalentes no outro idioma
+_BILINGUAL = {
+    # EN → PT
+    "technical writer": ["redator técnico", "analista de documentação"],
+    "support analyst": ["analista de suporte"],
+    "customer success": ["sucesso do cliente", "analista de cs"],
+    "customer success analyst": ["analista de customer success", "analista de sucesso do cliente"],
+    "customer experience": ["experiência do cliente", "analista de cx"],
+    "cx analyst": ["analista de cx", "analista de experiência do cliente"],
+    "implementation analyst": ["analista de implementação"],
+    "onboarding analyst": ["analista de onboarding", "analista de implementação"],
+    "training specialist": ["especialista em treinamento", "analista de treinamento"],
+    "knowledge base": ["base de conhecimento", "gestão do conhecimento"],
+    "data analyst": ["analista de dados"],
+    "bi analyst": ["analista de bi", "analista de inteligência de negócios"],
+    "software developer": ["desenvolvedor de software", "desenvolvedor"],
+    "frontend developer": ["desenvolvedor frontend"],
+    "backend developer": ["desenvolvedor backend"],
+    "product manager": ["gerente de produto", "gestor de produto"],
+    "product owner": ["dono do produto"],
+    "scrum master": ["scrum master"],
+    "ux designer": ["designer de ux", "designer de experiência"],
+    "cloud engineer": ["engenheiro de nuvem", "engenheiro cloud"],
+    "devops engineer": ["engenheiro devops"],
+    "data engineer": ["engenheiro de dados"],
+    "project analyst": ["analista de projetos"],
+    "sales analyst": ["analista de vendas"],
+    "content writer": ["redator de conteúdo", "produtor de conteúdo"],
+    # PT → EN
+    "redator técnico": ["technical writer"],
+    "analista de suporte": ["support analyst", "support specialist"],
+    "analista de implementação": ["implementation analyst", "onboarding specialist"],
+    "analista de treinamento": ["training analyst", "training specialist"],
+    "analista de cs": ["customer success analyst"],
+    "analista de cx": ["customer experience analyst", "cx analyst"],
+    "analista de dados": ["data analyst"],
+    "analista de bi": ["bi analyst", "business intelligence analyst"],
+    "analista de projetos": ["project analyst", "project coordinator"],
+    "analista de documentação": ["technical writer", "documentation specialist"],
+    "gestão do conhecimento": ["knowledge management", "technical writer"],
+    "base de conhecimento": ["knowledge base specialist", "technical writer"],
+    "desenvolvedor": ["software developer", "developer"],
+    "desenvolvedor frontend": ["frontend developer"],
+    "desenvolvedor backend": ["backend developer"],
+    "analista de knowledge base": ["technical writer", "knowledge base specialist"],
+    "sucesso do cliente": ["customer success"],
+    "experiência do cliente": ["customer experience", "cx"],
+    "gerente de produto": ["product manager"],
+}
+
+# Indicadores de texto em PT ou EN (para detectar idioma do termo)
+_BR_INDICATORS = {"analista", "desenvolvedor", "engenheiro", "gestor", "gerente",
+                   "especialista", "redator", "técnico", "experiência", "suporte",
+                   "treinamento", "implementação", "conhecimento", "dados", "negócios"}
+
+
+def translate_term(term: str) -> list[str]:
+    """Retorna traduções bilíngues para um termo de busca."""
+    t = term.lower().strip()
+    return _BILINGUAL.get(t, [])
+
+
+def expand_terms_bilingual(terms: list[str], max_total: int = 8) -> list[str]:
+    """
+    Expande uma lista de termos adicionando a contraparte bilíngue de cada um.
+    Mantém a ordem (original primeiro, tradução logo após).
+    Limita ao total máximo para não sobrecarregar as buscas.
+    """
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for t in terms:
+        t_lower = t.lower()
+        if t_lower not in seen:
+            seen.add(t_lower)
+            expanded.append(t)
+        # Adiciona traduções logo após o termo original
+        for translation in translate_term(t):
+            t2_lower = translation.lower()
+            if t2_lower not in seen:
+                seen.add(t2_lower)
+                expanded.append(translation)
+    return expanded[:max_total]
+
 
 def derive_search_terms(
     headline: str = "",
@@ -154,7 +238,9 @@ def derive_search_terms(
             if len(s) > 3 and s.lower() not in _STOPWORDS:
                 add_term(s)
 
-    return terms[:5]
+    base_terms = terms[:5]
+    # Expandir com traduções bilíngues PT↔EN
+    return expand_terms_bilingual(base_terms, max_total=8)
 
 
 # ---------------------------------------------------------------------------
@@ -179,16 +265,42 @@ async def search_linkedin_br(
     f_WT_map = {"remote": "2", "hybrid": "3", "onsite": "1"}
     f_TPR_map = {1: "r86400", 7: "r604800", 14: "r1209600", 30: "r2592000"}
 
+    # Mapeamento de localização para geoId do LinkedIn (força o país)
+    # Brasil: 106057199 | São Paulo: 90010382 | Rio de Janeiro: 90010306
+    GEO_IDS = {
+        "brasil": "106057199",
+        "brazil": "106057199",
+        "são paulo, brasil": "90010382",
+        "rio de janeiro, brasil": "90010306",
+        "belo horizonte, brasil": "90010412",
+        "curitiba, brasil": "90010423",
+        "campinas, brasil": "90010433",
+        "porto alegre, brasil": "90010440",
+    }
+
+    location_key = location.lower().strip()
+    geo_id = GEO_IDS.get(location_key, GEO_IDS["brasil"])  # Padrão: Brasil
+
     params: dict = {
         "keywords": query,
         "location": location,
+        "geoId": geo_id,
         "start": 0,
         "pageNum": 0,
+        "f_C": "",  # Sem filtro de empresa
     }
     if work_mode and work_mode in f_WT_map:
         params["f_WT"] = f_WT_map[work_mode]
     if jobage and jobage in f_TPR_map:
         params["f_TPR"] = f_TPR_map[jobage]
+
+    # Palavras-chave de localizações BR para validar resultados
+    BR_LOCATION_HINTS = {
+        "brasil", "brazil", "são paulo", "rio de janeiro", "belo horizonte",
+        "curitiba", "porto alegre", "brasília", "fortaleza", "manaus", "salvador",
+        "recife", "goiânia", "belém", "campinas", "guarulhos", "sp", "rj", "mg",
+        "pr", "rs", "ba", "ce", "pe", "go", "df", "remote", "remoto",
+    }
 
     try:
         url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
@@ -223,6 +335,18 @@ async def search_linkedin_br(
                 # Localização
                 location_el = card.find("span", class_=re.compile(r"job-search-card__location"))
                 location_text = location_el.get_text(strip=True) if location_el else location
+
+                # Filtrar vagas fora do Brasil (quando filtro = Brasil)
+                if geo_id == GEO_IDS["brasil"]:
+                    loc_lower = location_text.lower()
+                    is_br = any(hint in loc_lower for hint in BR_LOCATION_HINTS)
+                    # Se a localização for de outro país (ex: United States, Germany), pular
+                    NON_BR = {"united states", "estados unidos", "germany", "deutschland",
+                               "united kingdom", "reino unido", "france", "spain", "canada",
+                               "australia", "india", "netherlands", "mexico", "argentina"}
+                    is_foreign = any(c in loc_lower for c in NON_BR)
+                    if is_foreign:
+                        continue  # Pular vagas claramente de outro país
 
                 # Data
                 date_el = card.find("time")
