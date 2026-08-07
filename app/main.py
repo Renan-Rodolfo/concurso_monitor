@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -12,6 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import httpx
+from app import job_search as js
 
 from app.database import Base, engine, get_db, SessionLocal
 from app import models
@@ -535,14 +537,108 @@ def save_job_from_search(job_data: JobOpportunityCreate, db: Session = Depends(g
     db.refresh(new_job)
     return new_job
 
-# --- ROTA: BUSCA AO VIVO DE VAGAS (freehire.dev) ---
+# --- ROTA: BUSCA INTELIGENTE DE VAGAS (Multi-fonte: LinkedIn + Gupy + freehire.dev) ---
 
-class LiveSearchParams(BaseModel):
-    country: Optional[str] = None      # ISO-3166 alpha-2, ex: "br", "us", "de" — None = global
-    region: Optional[str] = None       # "latam", "eu", "us", "apac", "global"
+class SmartSearchParams(BaseModel):
+    prompt: Optional[str] = None       # Texto livre do usuário
     work_mode: Optional[str] = None    # "remote", "hybrid", "onsite" — None = qualquer
     jobage: Optional[int] = None       # Vagas dos últimos N dias — None = todas
-    limit: Optional[int] = 25
+    location: Optional[str] = "Brasil" # Localização para LinkedIn
+
+@app.get("/api/job-search/smart-terms")
+def get_smart_terms(db: Session = Depends(get_db)):
+    """Retorna os termos de busca derivados automaticamente do perfil cadastrado."""
+    profile = db.query(models.CandidateProfile).first()
+    if not profile:
+        return {"terms": [], "message": "Perfil não encontrado. Cadastre seu perfil primeiro."}
+    terms = js.derive_search_terms(
+        headline=profile.headline or "",
+        primary_skills=profile.primary_skills or "",
+        secondary_skills=profile.secondary_skills or "",
+        target_roles=profile.target_roles or "",
+        experience_summary=profile.experience_summary or "",
+    )
+    return {"terms": terms}
+
+@app.post("/api/job-search/smart-search")
+async def smart_search_jobs(params: SmartSearchParams = None, db: Session = Depends(get_db)):
+    """
+    Busca inteligente multi-fonte: LinkedIn + Gupy + freehire.dev
+    Deriva os termos de busca automaticamente do perfil cadastrado.
+    Aceita prompt em linguagem natural para refinar a busca.
+    """
+    if params is None:
+        params = SmartSearchParams()
+
+    profile = db.query(models.CandidateProfile).first()
+
+    # Derivar termos de busca do perfil + prompt
+    terms = js.derive_search_terms(
+        headline=profile.headline or "" if profile else "",
+        primary_skills=profile.primary_skills or "" if profile else "",
+        secondary_skills=profile.secondary_skills or "" if profile else "",
+        target_roles=profile.target_roles or "" if profile else "",
+        experience_summary=profile.experience_summary or "" if profile else "",
+        prompt=params.prompt or "",
+    )
+
+    if not terms:
+        raise HTTPException(
+            status_code=400,
+            detail="Não foi possível derivar termos de busca. Preencha seu perfil (Headline, Habilidades ou Cargos Desejados) ou digite um prompt."
+        )
+
+    logger.info(f"Smart search — termos derivados: {terms}")
+
+    # Habilidades e cargos-alvo do candidato para cálculo do Fit Score
+    cand_skills: list[str] = []
+    target_roles: list[str] = []
+    if profile:
+        if profile.primary_skills:
+            cand_skills += [s.strip() for s in profile.primary_skills.split(",") if s.strip()]
+        if profile.secondary_skills:
+            cand_skills += [s.strip() for s in profile.secondary_skills.split(",") if s.strip()]
+        if profile.target_roles:
+            target_roles = [r.strip() for r in profile.target_roles.split(",") if r.strip()]
+
+    all_results: list[dict] = []
+    seen_ids: set[str] = set()
+    location = params.location or "Brasil"
+
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        # Executar buscas em paralelo para cada termo
+        for term in terms[:4]:  # Máx 4 termos por rodada
+            tasks = [
+                js.search_linkedin_br(client, term, location=location,
+                                      work_mode=params.work_mode, jobage=params.jobage),
+                js.search_gupy_br(client, term),
+                js.search_freehire_br(client, term, work_mode=params.work_mode, jobage=params.jobage),
+            ]
+            batch = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result_list in batch:
+                if isinstance(result_list, Exception):
+                    logger.error(f"Erro em batch de busca: {result_list}")
+                    continue
+                for job in (result_list or []):
+                    job_id = job.get("id", "")
+                    if not job_id or job_id in seen_ids:
+                        continue
+                    seen_ids.add(job_id)
+                    # Calcular Fit Score
+                    job["fit_score"] = js.compute_fit_score(job, cand_skills, target_roles)
+                    all_results.append(job)
+
+    # Ordenar por fit_score decrescente, depois por fonte (LinkedIn primeiro)
+    source_order = {"LinkedIn": 0, "Gupy": 1, "freehire.dev": 2}
+    all_results.sort(key=lambda x: (-x["fit_score"], source_order.get(x.get("source", ""), 9)))
+
+    return {
+        "status": "success",
+        "terms_used": terms,
+        "total": len(all_results),
+        "results": all_results
+    }
 
 @app.post("/api/job-search/search-live")
 async def search_live_jobs(params: LiveSearchParams = None, db: Session = Depends(get_db)):

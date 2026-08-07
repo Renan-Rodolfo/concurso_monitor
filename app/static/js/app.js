@@ -58,6 +58,7 @@ function switchTab(tabName) {
         loadCandidateProfile();
         loadJobQueries();
         loadJobOpportunities();
+        loadSmartTerms();
     }
 }
 
@@ -1161,8 +1162,306 @@ async function saveJobFromSearch(idx) {
             btn.disabled = false;
             btn.innerHTML = '<i class="fa-solid fa-bookmark"></i> Salvar no Board';
         }
-        showToast('Erro de conexão ao salvar vaga.', 'error');
-        console.error('Save from search error:', e);
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fa-solid fa-bookmark"></i> Salvar no Board';
+                }
+                showToast('Erro de conexão ao salvar vaga.', 'error');
+                console.error('Save from search error:', e);
+            }
+}
+
+// =========================================================
+// SMART JOB SEARCH — Busca Inteligente Multi-fonte
+// =========================================================
+
+let smartSearchResults = [];
+
+const SOURCE_CONFIG = {
+    'LinkedIn': {
+        color: 'bg-blue-900/60 border-blue-700/50 text-blue-300',
+        icon: 'fa-brands fa-linkedin',
+        dot: 'bg-blue-400',
+    },
+    'Gupy': {
+        color: 'bg-orange-900/50 border-orange-700/50 text-orange-300',
+        icon: 'fa-solid fa-g',
+        dot: 'bg-orange-400',
+    },
+    'freehire.dev': {
+        color: 'bg-emerald-900/50 border-emerald-700/50 text-emerald-300',
+        icon: 'fa-solid fa-globe',
+        dot: 'bg-emerald-400',
+    },
+};
+
+async function loadSmartTerms() {
+    const container = document.getElementById('smart-terms-chips');
+    if (!container) return;
+    try {
+        const res = await fetch('/api/job-search/smart-terms');
+        const data = await res.json();
+        const terms = data.terms || [];
+        if (terms.length === 0) {
+            container.innerHTML = '<span class="text-xs text-slate-500 italic">Preencha seu Perfil para gerar termos automaticamente.</span>';
+            return;
+        }
+        container.innerHTML = terms.map(t =>
+            `<span class="bg-slate-800 border border-slate-600 text-slate-200 px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1.5">
+                <i class="fa-solid fa-tag text-purple-400 text-[10px]"></i> ${t}
+            </span>`
+        ).join('');
+    } catch (e) {
+        container.innerHTML = '<span class="text-xs text-red-400">Erro ao carregar termos.</span>';
+    }
+}
+
+async function runSmartSearch() {
+    const btn = document.getElementById('btn-smart-search');
+    const loader = document.getElementById('smart-search-loader');
+    const errorBox = document.getElementById('smart-search-error');
+    const idle = document.getElementById('smart-search-idle');
+    const summary = document.getElementById('smart-search-summary');
+    const termsUsed = document.getElementById('smart-terms-used');
+    const resultsGrid = document.getElementById('smart-search-results');
+
+    const prompt = (document.getElementById('smart-search-prompt')?.value || '').trim();
+    const location = document.getElementById('smart-filter-location')?.value || 'Brasil';
+    const workMode = document.getElementById('smart-filter-workmode')?.value || null;
+    const jobageRaw = document.getElementById('smart-filter-jobage')?.value || '';
+
+    const body = {
+        prompt: prompt || null,
+        location: location,
+        work_mode: workMode || null,
+        jobage: jobageRaw ? parseInt(jobageRaw) : null,
+    };
+
+    // Reset UI
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Buscando...';
+    loader.classList.remove('hidden');
+    errorBox.classList.add('hidden');
+    idle.classList.add('hidden');
+    summary.classList.add('hidden');
+    termsUsed.classList.add('hidden');
+    resultsGrid.classList.add('hidden');
+    resultsGrid.innerHTML = '';
+
+    // Cycle loading messages
+    const statusEl = document.getElementById('smart-search-status-msg');
+    const messages = [
+        'Consultando LinkedIn...',
+        'Buscando no Gupy (vagas brasileiras)...',
+        'Consultando freehire.dev...',
+        'Calculando compatibilidade com seu perfil...',
+    ];
+    let msgIdx = 0;
+    const msgInterval = setInterval(() => {
+        if (statusEl) statusEl.textContent = messages[msgIdx % messages.length];
+        msgIdx++;
+    }, 2500);
+
+    try {
+        const res = await fetch('/api/job-search/smart-search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        clearInterval(msgInterval);
+        loader.classList.add('hidden');
+
+        if (!res.ok) {
+            document.getElementById('smart-search-error-msg').textContent =
+                data.detail || 'Erro inesperado. Tente novamente.';
+            errorBox.classList.remove('hidden');
+            return;
+        }
+
+        smartSearchResults = data.results || [];
+        const terms = data.terms_used || [];
+
+        if (smartSearchResults.length === 0) {
+            document.getElementById('smart-search-error-msg').textContent =
+                'Nenhuma vaga encontrada para os termos detectados. Tente refinar com um prompt ou ajuste seu perfil.';
+            errorBox.classList.remove('hidden');
+            return;
+        }
+
+        // Show summary
+        document.getElementById('smart-results-count').textContent = smartSearchResults.length;
+        document.getElementById('smart-search-timestamp').textContent =
+            `${new Date().toLocaleTimeString('pt-BR')} · ${location}`;
+
+        // Source badges
+        const sourceCounts = {};
+        smartSearchResults.forEach(j => sourceCounts[j.source] = (sourceCounts[j.source] || 0) + 1);
+        document.getElementById('smart-source-badges').innerHTML = Object.entries(sourceCounts)
+            .map(([src, cnt]) => {
+                const cfg = SOURCE_CONFIG[src] || { color: 'bg-slate-800 border-slate-600 text-slate-300', icon: 'fa-solid fa-circle', dot: 'bg-slate-400' };
+                return `<span class="border ${cfg.color} px-2.5 py-0.5 rounded-full text-xs font-medium flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full ${cfg.dot}"></span>${src} (${cnt})
+                </span>`;
+            }).join('');
+
+        // Terms used chips
+        if (terms.length > 0) {
+            termsUsed.innerHTML = '<span class="text-xs text-slate-500">Buscado com:</span>' +
+                terms.map(t => `<span class="bg-purple-900/40 border border-purple-700/40 text-purple-300 px-2 py-0.5 rounded-md text-xs">${t}</span>`).join('');
+            termsUsed.classList.remove('hidden');
+        }
+
+        summary.classList.remove('hidden');
+        resultsGrid.classList.remove('hidden');
+        renderSmartResults(smartSearchResults);
+
+    } catch (e) {
+        clearInterval(msgInterval);
+        loader.classList.add('hidden');
+        document.getElementById('smart-search-error-msg').textContent =
+            'Falha de conexão com o servidor. Verifique e tente novamente.';
+        errorBox.classList.remove('hidden');
+        console.error('Smart search error:', e);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-chart"></i> Buscar Vagas';
+    }
+}
+
+function fitScoreColor(score) {
+    if (score >= 60) return 'text-emerald-400 border-emerald-600/50 bg-emerald-900/30';
+    if (score >= 30) return 'text-yellow-400 border-yellow-600/50 bg-yellow-900/20';
+    return 'text-slate-400 border-slate-600/50 bg-slate-900/40';
+}
+
+function workModelBadge(wm) {
+    const map = {
+        'Remoto': 'bg-emerald-900/50 text-emerald-300 border-emerald-700/50',
+        'Híbrido': 'bg-blue-900/50 text-blue-300 border-blue-700/50',
+        'Presencial': 'bg-amber-900/50 text-amber-300 border-amber-700/50',
+    };
+    return map[wm] || 'bg-slate-800 text-slate-400 border-slate-600';
+}
+
+function renderSmartResults(results) {
+    const grid = document.getElementById('smart-search-results');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    results.forEach((job, i) => {
+        const srcCfg = SOURCE_CONFIG[job.source] || { color: 'bg-slate-800 border-slate-600 text-slate-300', icon: 'fa-solid fa-globe', dot: 'bg-slate-400' };
+        const fitColors = fitScoreColor(job.fit_score);
+        const wmBadge = workModelBadge(job.work_model);
+        const postedDate = job.posted_at ? new Date(job.posted_at).toLocaleDateString('pt-BR') : '';
+        const desc = job.description ? job.description.substring(0, 150) + (job.description.length > 150 ? '...' : '') : '';
+        const skills = job.skills_required
+            ? job.skills_required.split(',').slice(0, 4).map(s =>
+                `<span class="bg-slate-900 border border-slate-700 text-slate-400 px-1.5 py-0.5 rounded text-[10px]">${s.trim()}</span>`
+              ).join('')
+            : '';
+
+        const card = document.createElement('div');
+        card.className = 'bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4 flex flex-col gap-3 hover:border-slate-500/80 transition-all hover:shadow-xl hover:-translate-y-0.5 duration-200';
+        card.innerHTML = `
+            <!-- Card header -->
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1 flex-wrap">
+                        <!-- Source badge -->
+                        <span class="border text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${srcCfg.color}">
+                            <i class="${srcCfg.icon} text-[9px]"></i> ${job.source}
+                        </span>
+                        ${job.seniority ? `<span class="text-[10px] text-slate-500">${job.seniority}</span>` : ''}
+                    </div>
+                    <h4 class="text-sm font-bold text-white leading-snug line-clamp-2">${job.title}</h4>
+                    <p class="text-xs text-slate-400 mt-0.5 truncate">${job.company}</p>
+                </div>
+                <!-- Fit Score -->
+                <div class="flex-shrink-0 text-center border rounded-xl px-2.5 py-1.5 ${fitColors}">
+                    <div class="text-base font-black leading-none">${job.fit_score}%</div>
+                    <div class="text-[9px] font-semibold uppercase tracking-wide leading-none mt-0.5 opacity-70">fit</div>
+                </div>
+            </div>
+
+            <!-- Location & work mode -->
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-xs text-slate-500 flex items-center gap-1">
+                    <i class="fa-solid fa-location-dot text-slate-600"></i> ${job.location}
+                </span>
+                <span class="border text-[10px] px-2 py-0.5 rounded-full ${wmBadge}">${job.work_model}</span>
+                ${job.salary ? `<span class="text-[10px] text-emerald-400 font-medium flex items-center gap-1"><i class="fa-solid fa-circle-dollar-to-slot"></i> ${job.salary}</span>` : ''}
+                ${postedDate ? `<span class="text-[10px] text-slate-600">${postedDate}</span>` : ''}
+            </div>
+
+            <!-- Description -->
+            ${desc ? `<p class="text-xs text-slate-500 leading-relaxed line-clamp-3">${desc}</p>` : ''}
+
+            <!-- Skills -->
+            ${skills ? `<div class="flex flex-wrap gap-1">${skills}</div>` : ''}
+
+            <!-- Actions -->
+            <div class="flex gap-2 mt-auto pt-1">
+                <a href="${job.link}" target="_blank" rel="noopener noreferrer"
+                   class="flex-1 text-center bg-sky-600/20 hover:bg-sky-600/40 border border-sky-600/40 text-sky-300 text-xs font-semibold py-2 rounded-lg transition-all flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i> Ver Vaga
+                </a>
+                <button onclick="saveJobFromSmartSearch(this, ${i})"
+                        class="bg-purple-600/20 hover:bg-purple-600/40 border border-purple-600/40 text-purple-300 text-xs font-semibold py-2 px-3 rounded-lg transition-all flex items-center gap-1.5">
+                    <i class="fa-solid fa-bookmark"></i> Salvar
+                </button>
+            </div>
+        `;
+        grid.appendChild(card);
+    });
+}
+
+function sortSmartResults() {
+    const sortBy = document.getElementById('smart-sort-select')?.value || 'fit';
+    const sorted = [...smartSearchResults];
+    if (sortBy === 'fit') sorted.sort((a, b) => b.fit_score - a.fit_score);
+    else if (sortBy === 'title') sorted.sort((a, b) => a.title.localeCompare(b.title, 'pt'));
+    else if (sortBy === 'company') sorted.sort((a, b) => a.company.localeCompare(b.company, 'pt'));
+    else if (sortBy === 'source') sorted.sort((a, b) => a.source.localeCompare(b.source));
+    renderSmartResults(sorted);
+}
+
+async function saveJobFromSmartSearch(btn, index) {
+    const job = smartSearchResults[index];
+    if (!job) return;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+    try {
+        const res = await fetch('/api/job-search/jobs/save-from-search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: job.title,
+                company: job.company,
+                location: job.location,
+                work_model: job.work_model,
+                salary: job.salary,
+                link: job.link,
+                skills_required: job.skills_required,
+                description: job.description,
+                fit_score: job.fit_score,
+                notes: `Encontrado via ${job.source} · Busca: "${job.query_used}"`,
+            }),
+        });
+        if (res.ok) {
+            btn.innerHTML = '<i class="fa-solid fa-check"></i> Salvo';
+            btn.className = btn.className.replace('purple', 'emerald');
+            showToast(`✅ "${job.title}" salvo no Board de Vagas!`, 'success');
+        } else {
+            const err = await res.json();
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-bookmark"></i> Salvar';
+            showToast(err.detail || 'Erro ao salvar vaga.', 'error');
+        }
+    } catch (e) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-bookmark"></i> Salvar';
+        showToast('Erro de conexão.', 'error');
     }
 }
 

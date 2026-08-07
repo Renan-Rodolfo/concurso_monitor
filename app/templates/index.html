@@ -327,7 +327,7 @@
                         <i class="fa-solid fa-user-gear mr-1 text-emerald-400"></i> Perfil do Candidato
                     </button>
                     <button id="job-subtab-btn-queries" onclick="switchJobSubTab('queries')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">
-                        <i class="fa-solid fa-sliders mr-1 text-blue-400"></i> Filtros & Buscas
+                        <i class="fa-solid fa-wand-magic-sparkles mr-1 text-sky-400"></i> Busca Inteligente
                     </button>
                     <button id="job-subtab-btn-board" onclick="switchJobSubTab('board')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">
                         <i class="fa-solid fa-table-columns mr-1 text-purple-400"></i> Board de Vagas
@@ -356,7 +356,7 @@
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Headline / Cargo Atual</label>
-                                <input type="text" id="job-prof-headline" placeholder="Ex: Engenheiro de Software Senior"
+                                <input type="text" id="job-prof-headline" placeholder="Ex: Analista de Implementação"
                                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
                             </div>
                             <div>
@@ -369,13 +369,13 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Habilidades Principais (Hard Skills)</label>
-                                <input type="text" id="job-prof-primary-skills" placeholder="Ex: Python, FastAPI, Docker, SQL, PostgreSQL, Git"
+                                <input type="text" id="job-prof-primary-skills" placeholder="Ex: Salesforce, HubSpot, Zendesk, treinamento, SQL"
                                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
-                                <p class="text-[11px] text-slate-500 mt-1">Separe por vírgulas. Usado para o cálculo automático de Fit Score.</p>
+                                <p class="text-[11px] text-slate-500 mt-1">Separe por vírgulas. Usado para gerar termos de busca e Fit Score.</p>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Habilidades Secundárias & Ferramentas</label>
-                                <input type="text" id="job-prof-secondary-skills" placeholder="Ex: Linux, AWS, Tailwind, CI/CD, Redis"
+                                <input type="text" id="job-prof-secondary-skills" placeholder="Ex: Excel, Jira, Power BI, Notion, Slack"
                                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
                                 <p class="text-[11px] text-slate-500 mt-1">Separe por vírgulas.</p>
                             </div>
@@ -384,8 +384,9 @@
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Cargos Desejados / Alvo</label>
-                                <input type="text" id="job-prof-target-roles" placeholder="Ex: Backend Developer, Python Developer, Tech Lead"
+                                <input type="text" id="job-prof-target-roles" placeholder="Ex: Analista de Implementação, Analista de Suporte, Analista de CX"
                                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+                                <p class="text-[11px] text-slate-500 mt-1">Estes cargos serão usados diretamente como termos de busca.</p>
                             </div>
                             <div>
                                 <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Restrições & Deal-breakers</label>
@@ -402,46 +403,155 @@
 
                         <div class="flex justify-end pt-2">
                             <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-6 py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-emerald-600/20 flex items-center gap-2">
-                                <i class="fa-solid fa-floppy-disk"></i> Salvar Insumos do Perfil
+                                <i class="fa-solid fa-floppy-disk"></i> Salvar Perfil
                             </button>
                         </div>
                     </form>
                 </div>
             </div>
 
-            <!-- SUB-TAB 2: FILTROS & PARÂMETROS DE BUSCA -->
+            <!-- SUB-TAB 2: BUSCA INTELIGENTE -->
             <div id="job-subtab-queries" class="job-subtab-content hidden space-y-6">
                 <div class="bg-slate-800 border border-slate-700/80 rounded-2xl p-6 shadow-xl">
-                    <div class="flex items-center justify-between mb-4">
-                        <div>
-                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
-                                <i class="fa-solid fa-sliders text-blue-400"></i> Parâmetros de Pesquisa de Vagas
-                            </h3>
-                            <p class="text-xs text-slate-400">Cadastre os termos e localidades que você deseja monitorar nos portais de emprego</p>
+
+                    <!-- Header -->
+                    <div class="mb-6">
+                        <h3 class="text-xl font-bold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-wand-magic-sparkles text-sky-400"></i> Busca Inteligente de Vagas
+                        </h3>
+                        <p class="text-xs text-slate-400 mt-1">
+                            Busca em <span class="text-sky-300 font-medium">LinkedIn</span>, <span class="text-orange-300 font-medium">Gupy</span> e <span class="text-emerald-300 font-medium">freehire.dev</span> usando seu perfil automaticamente — sem precisar configurar nada.
+                        </p>
+                    </div>
+
+                    <!-- Termos derivados do perfil -->
+                    <div class="mb-5 p-4 bg-slate-900/70 rounded-xl border border-slate-700/50">
+                        <div class="flex items-center justify-between mb-3">
+                            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide flex items-center gap-1.5">
+                                <i class="fa-solid fa-brain text-purple-400"></i> Termos detectados do seu perfil
+                            </p>
+                            <button onclick="loadSmartTerms()" class="text-xs text-slate-500 hover:text-sky-400 transition-colors flex items-center gap-1">
+                                <i class="fa-solid fa-rotate-right"></i> Atualizar
+                            </button>
+                        </div>
+                        <div id="smart-terms-chips" class="flex flex-wrap gap-2">
+                            <span class="text-xs text-slate-600 italic">Carregando termos do perfil...</span>
+                        </div>
+                        <p class="text-[11px] text-slate-600 mt-2">Estes termos são gerados automaticamente. Para mudar, edite seu perfil na aba "Perfil do Candidato".</p>
+                    </div>
+
+                    <!-- Prompt livre -->
+                    <div class="mb-5">
+                        <label class="block text-xs font-semibold text-slate-400 uppercase mb-2 flex items-center gap-1.5">
+                            <i class="fa-solid fa-message text-sky-400"></i> Refine sua busca (opcional)
+                        </label>
+                        <div class="relative">
+                            <textarea id="smart-search-prompt" rows="2"
+                                      placeholder="Ex: &quot;quero vagas de analista com foco em customer success ou implementação de software&quot; — deixe em branco para usar só o perfil"
+                                      class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 pr-12 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 resize-none"></textarea>
+                            <button onclick="document.getElementById('smart-search-prompt').value=''" class="absolute right-3 top-3 text-slate-600 hover:text-slate-400 text-xs">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
                         </div>
                     </div>
 
-                    <!-- Add Query Form -->
-                    <form onsubmit="handleAddJobQuery(event)" class="flex flex-col md:flex-row gap-3 mb-6">
-                        <input type="text" id="input-query-title" placeholder="Ex: Desenvolvedor Python, Engenheiro de Dados..." required
-                               class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
-                        <input type="text" id="input-query-location" placeholder="Localização (Ex: Brasil, São Paulo, Remoto)" value="Remoto"
-                               class="w-full md:w-56 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
-                        <select id="input-query-model" class="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
-                            <option value="Remoto">Remoto</option>
-                            <option value="Híbrido">Híbrido</option>
-                            <option value="Presencial">Presencial</option>
-                            <option value="Todos">Qualquer Modelo</option>
-                        </select>
-                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-5 py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-blue-600/20 whitespace-nowrap">
-                            <i class="fa-solid fa-plus"></i> Adicionar Filtro
+                    <!-- Filtros rápidos -->
+                    <div class="flex flex-wrap items-end gap-3 mb-6 p-4 bg-slate-900/40 rounded-xl border border-slate-700/40">
+                        <div class="flex flex-col gap-1">
+                            <label class="text-xs font-semibold text-slate-500 uppercase tracking-wide">📍 Localização</label>
+                            <select id="smart-filter-location" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 min-w-[160px]">
+                                <option value="Brasil" selected>🇧🇷 Brasil</option>
+                                <option value="São Paulo, Brasil">São Paulo, SP</option>
+                                <option value="Rio de Janeiro, Brasil">Rio de Janeiro, RJ</option>
+                                <option value="Belo Horizonte, Brasil">Belo Horizonte, MG</option>
+                                <option value="Curitiba, Brasil">Curitiba, PR</option>
+                                <option value="Campinas, Brasil">Campinas, SP</option>
+                                <option value="Porto Alegre, Brasil">Porto Alegre, RS</option>
+                                <option value="Remoto">Remoto (qualquer)</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-col gap-1">
+                            <label class="text-xs font-semibold text-slate-500 uppercase tracking-wide">💼 Modalidade</label>
+                            <select id="smart-filter-workmode" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 min-w-[140px]">
+                                <option value="">Qualquer</option>
+                                <option value="remote">Remoto</option>
+                                <option value="hybrid">Híbrido</option>
+                                <option value="onsite">Presencial</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-col gap-1">
+                            <label class="text-xs font-semibold text-slate-500 uppercase tracking-wide">📅 Publicação</label>
+                            <select id="smart-filter-jobage" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 min-w-[150px]">
+                                <option value="">Qualquer data</option>
+                                <option value="7">Últimos 7 dias</option>
+                                <option value="14">Últimos 14 dias</option>
+                                <option value="30" selected>Últimos 30 dias</option>
+                            </select>
+                        </div>
+                        <button id="btn-smart-search" onclick="runSmartSearch()"
+                                class="bg-sky-600 hover:bg-sky-500 active:scale-95 text-white font-bold px-8 py-2 rounded-xl text-sm transition-all shadow-lg shadow-sky-600/30 flex items-center gap-2 h-[38px] mt-auto">
+                            <i class="fa-solid fa-magnifying-glass-chart"></i> Buscar Vagas
                         </button>
-                    </form>
-
-                    <!-- Active Queries List -->
-                    <div id="job-queries-list" class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <span class="text-xs text-slate-500 col-span-3">Nenhum filtro de busca cadastrado ainda.</span>
                     </div>
+
+                    <!-- Loader -->
+                    <div id="smart-search-loader" class="hidden py-12 flex flex-col items-center gap-4">
+                        <div class="relative w-16 h-16">
+                            <div class="absolute inset-0 rounded-full border-4 border-slate-700"></div>
+                            <div class="absolute inset-0 rounded-full border-4 border-t-sky-400 animate-spin"></div>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-sky-300 font-semibold text-sm">Buscando vagas compatíveis...</p>
+                            <p class="text-slate-500 text-xs mt-1" id="smart-search-status-msg">Consultando LinkedIn, Gupy e freehire.dev simultaneamente</p>
+                        </div>
+                    </div>
+
+                    <!-- Error -->
+                    <div id="smart-search-error" class="hidden bg-red-900/30 border border-red-700/60 rounded-xl p-4 text-sm text-red-300 flex items-start gap-3">
+                        <i class="fa-solid fa-circle-exclamation text-red-400 mt-0.5 flex-shrink-0"></i>
+                        <span id="smart-search-error-msg"></span>
+                    </div>
+
+                    <!-- Idle -->
+                    <div id="smart-search-idle" class="py-10 flex flex-col items-center gap-4 text-center">
+                        <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center border border-slate-700/50">
+                            <i class="fa-solid fa-magnifying-glass text-sky-500/60 text-3xl"></i>
+                        </div>
+                        <div>
+                            <p class="text-slate-300 font-semibold text-sm">Pronto para buscar vagas</p>
+                            <p class="text-slate-600 text-xs mt-1 max-w-sm">
+                                Clique em <strong class="text-slate-400">Buscar Vagas</strong> para encontrar oportunidades compatíveis com seu perfil no LinkedIn, Gupy e freehire.dev
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Results summary bar -->
+                    <div id="smart-search-summary" class="hidden mb-4 flex items-center justify-between gap-3 flex-wrap">
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <span class="bg-sky-900/60 border border-sky-700/50 text-sky-300 px-3 py-1 rounded-full text-xs font-semibold">
+                                <i class="fa-solid fa-list-check mr-1"></i><span id="smart-results-count">0</span> vagas encontradas
+                            </span>
+                            <div id="smart-source-badges" class="flex gap-2"></div>
+                            <span class="text-slate-500 text-xs" id="smart-search-timestamp"></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs text-slate-400">Ordenar:</label>
+                            <select id="smart-sort-select" onchange="sortSmartResults()" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500">
+                                <option value="fit">Maior Fit Score</option>
+                                <option value="title">Título A→Z</option>
+                                <option value="company">Empresa A→Z</option>
+                                <option value="source">Por Fonte</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Terms used -->
+                    <div id="smart-terms-used" class="hidden mb-4 flex flex-wrap gap-2 items-center">
+                        <span class="text-xs text-slate-500">Buscado com:</span>
+                    </div>
+
+                    <!-- Results grid -->
+                    <div id="smart-search-results" class="hidden grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
                 </div>
             </div>
 
