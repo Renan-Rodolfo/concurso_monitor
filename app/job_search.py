@@ -103,63 +103,57 @@ def derive_search_terms(
     seen: set[str] = set()
 
     def add_term(t: str):
-        t = t.strip().lower()
-        if t and t not in seen and len(t) > 2:
-            seen.add(t)
+        # Remove sufixos entre parênteses tipo "(Júnior/Pleno)" ou "(Apenas Remoto)"
+        t = re.sub(r'\(.*?\)', '', t).strip()
+        t_clean = t.lower()
+        if t and t_clean not in seen and len(t) > 2:
+            seen.add(t_clean)
             terms.append(t)
 
     # 1. Termos explícitos do prompt do usuário (maior prioridade)
     if prompt and prompt.strip():
-        # Extrair palavras-chave relevantes do prompt (remove stopwords simples)
         clean_prompt = re.sub(r'[^\w\s]', ' ', prompt.lower())
         words = clean_prompt.split()
-        # Frases de 2-3 palavras que parecem cargo/função
         for i in range(len(words)):
             if words[i] in _STOPWORDS:
                 continue
-            # Bigrama
             if i + 1 < len(words) and words[i+1] not in _STOPWORDS:
-                bigram = f"{words[i]} {words[i+1]}"
-                add_term(bigram)
-            # Trigrama
+                add_term(f"{words[i]} {words[i+1]}")
             if i + 2 < len(words) and words[i+2] not in _STOPWORDS:
                 trigram = f"{words[i]} {words[i+1]} {words[i+2]}"
                 if len(trigram) > 8:
                     add_term(trigram)
-            # Palavra única (cargo)
             if len(words[i]) > 4:
                 add_term(words[i])
 
     # 2. Cargos alvo cadastrados explicitamente
     if target_roles:
         for role in target_roles.split(","):
-            add_term(role.strip())
+            if role.strip():
+                add_term(role.strip())
 
     # 3. Headline / cargo atual
     if headline:
-        add_term(headline.strip())
-        # Partes da headline (para "Analista de Implementação Senior" → "Analista de Implementação")
+        # Tentar extrair blocos separados por | / - ,
         parts = [p.strip() for p in re.split(r'[,|/·-]', headline) if p.strip()]
         for p in parts:
-            add_term(p)
+            if len(p) > 3:
+                add_term(p)
 
     # 4. Mapeamento de skills → cargos típicos
     all_skills_raw = f"{primary_skills},{secondary_skills}".lower()
     for skill_key, role_suggestions in _SKILL_TO_ROLE.items():
         if skill_key in all_skills_raw:
-            for suggestion in role_suggestions[:2]:  # Máx 2 por skill
+            for suggestion in role_suggestions[:2]:
                 add_term(suggestion)
 
-    # 5. Skills principais como termo de busca direto (para ferramentas específicas)
+    # 5. Skills principais como termo direto se forem nomes de tecnologia/ferramenta
     if primary_skills:
         for skill in primary_skills.split(","):
             s = skill.strip()
             if len(s) > 3 and s.lower() not in _STOPWORDS:
-                # Só adiciona se for ferramenta conhecida (evitar termos genéricos)
-                if any(k in s.lower() for k in ["force", "spot", "desk", "power", "ython", "java", "figma"]):
-                    add_term(s)
+                add_term(s)
 
-    # Limitar a 5 termos mais relevantes
     return terms[:5]
 
 

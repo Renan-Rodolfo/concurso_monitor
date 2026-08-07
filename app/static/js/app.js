@@ -629,7 +629,7 @@ function switchJobSubTab(subTabName) {
     if (target) target.classList.remove('hidden');
 
     if (subTabName === 'profile') loadCandidateProfile();
-    else if (subTabName === 'queries') loadJobQueries();
+    else if (subTabName === 'queries') loadSmartTerms();
     else if (subTabName === 'board') loadJobOpportunities();
 }
 
@@ -674,6 +674,7 @@ async function handleSaveCandidateProfile(event) {
 
         if (res.ok) {
             showToast('Perfil do candidato salvo com sucesso!');
+            loadSmartTerms();
         } else {
             showToast('Erro ao salvar perfil.', 'error');
         }
