@@ -89,3 +89,10 @@ upskill/*.md
 
 # Brainstorm mockups (superpowers visual companion) - never ship
 .superpowers/
+
+# Concurso Monitor dados locais e variáveis de ambiente
+.env
+concurso_monitor/.env
+concurso_monitor/data/*.db
+concurso_monitor/data/*.sqlite
+
