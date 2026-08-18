@@ -36,10 +36,25 @@ async def scheduled_scraper():
     finally:
         db.close()
 
+def check_and_migrate_db():
+    """Migração leve para SQLite garantindo colunas adicionadas recentemente."""
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("PRAGMA table_info(finance_transactions)"))
+            columns = [row[1] for row in result.fetchall()]
+            if columns and "transaction_type" not in columns:
+                conn.execute(text("ALTER TABLE finance_transactions ADD COLUMN transaction_type VARCHAR(20) DEFAULT 'expense'"))
+                conn.commit()
+                logger.info("Migração de banco executada: coluna 'transaction_type' adicionada em finance_transactions.")
+    except Exception as ex:
+        logger.warning(f"Aviso na verificação de migração do banco: {ex}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Criar tabelas se não existirem
     Base.metadata.create_all(bind=engine)
+    check_and_migrate_db()
 
     # Configurar agendamento diário (padrão 07:00 AM)
     hour = int(os.getenv("SCRAPER_CRON_HOUR", "7"))
@@ -844,58 +859,68 @@ def delete_finance_transaction(tx_id: int, db: Session = Depends(get_db)):
 @app.post("/api/finances/upload")
 async def upload_finance_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Importa faturas a partir do upload de arquivos CSV, OFX ou TXT do Nubank."""
-    raw_bytes = await file.read()
     try:
-        content = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        content = raw_bytes.decode("latin-1", errors="ignore")
+        raw_bytes = await file.read()
+        try:
+            content = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            content = raw_bytes.decode("latin-1", errors="ignore")
 
-    rules = db.query(models.FinanceCategoryRule).all()
-    rule_dicts = [{"keyword": r.keyword, "category_name": r.category_name} for r in rules]
+        rules = db.query(models.FinanceCategoryRule).all()
+        rule_dicts = [{"keyword": r.keyword, "category_name": r.category_name} for r in rules]
 
-    filename_lower = file.filename.lower() if file.filename else ""
-    
-    if filename_lower.endswith(".ofx") or "<OFX>" in content or "<STMTTRN>" in content:
-        parsed_items = finance.parse_ofx(content, rule_dicts)
-    else:
-        parsed_items = finance.parse_nubank_csv(content, rule_dicts)
+        filename_lower = file.filename.lower() if file.filename else ""
+        
+        if filename_lower.endswith(".ofx") or "<OFX>" in content or "<STMTTRN>" in content:
+            parsed_items = finance.parse_ofx(content, rule_dicts)
+        else:
+            parsed_items = finance.parse_nubank_csv(content, rule_dicts)
+            if not parsed_items:
+                parsed_items = finance.parse_raw_text(content, rule_dicts)
+
         if not parsed_items:
-            parsed_items = finance.parse_raw_text(content, rule_dicts)
+            raise HTTPException(
+                status_code=400,
+                detail="Nenhuma transação válida foi encontrada no arquivo. Certifique-se de que é uma fatura CSV/OFX do Nubank."
+            )
 
-    if not parsed_items:
+        db_items = []
+        for item in parsed_items:
+            new_tx = models.FinanceTransaction(
+                date=item["date"],
+                month_year=item["month_year"],
+                title=item["title"],
+                amount=item["amount"],
+                transaction_type=item.get("transaction_type", "expense"),
+                category=item["category"],
+                original_category=item.get("original_category"),
+                payment_method=item.get("payment_method", "Extrato / Cartão Nubank")
+            )
+            db.add(new_tx)
+            db_items.append(new_tx)
+
+        db.commit()
+
+        total_amt = round(sum([i["amount"] for i in parsed_items]), 2)
+        incomes_count = sum(1 for i in parsed_items if i.get("transaction_type") == "income")
+        expenses_count = len(parsed_items) - incomes_count
+        return {
+            "status": "success",
+            "imported_count": len(parsed_items),
+            "incomes_count": incomes_count,
+            "expenses_count": expenses_count,
+            "total_amount": total_amt,
+            "message": f"{len(parsed_items)} lançamentos importados ({incomes_count} entradas e {expenses_count} saídas)!"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao processar upload de fatura: {e}", exc_info=True)
+        db.rollback()
         raise HTTPException(
-            status_code=400,
-            detail="Nenhuma transação válida foi encontrada no arquivo. Certifique-se de que é uma fatura CSV/OFX do Nubank."
+            status_code=500,
+            detail=f"Erro ao processar o arquivo: {str(e)}"
         )
-
-    db_items = []
-    for item in parsed_items:
-        new_tx = models.FinanceTransaction(
-            date=item["date"],
-            month_year=item["month_year"],
-            title=item["title"],
-            amount=item["amount"],
-            transaction_type=item.get("transaction_type", "expense"),
-            category=item["category"],
-            original_category=item.get("original_category"),
-            payment_method=item.get("payment_method", "Extrato / Cartão Nubank")
-        )
-        db.add(new_tx)
-        db_items.append(new_tx)
-
-    db.commit()
-
-    total_amt = round(sum([i["amount"] for i in parsed_items]), 2)
-    incomes_count = sum(1 for i in parsed_items if i.get("transaction_type") == "income")
-    expenses_count = len(parsed_items) - incomes_count
-    return {
-        "status": "success",
-        "imported_count": len(parsed_items),
-        "incomes_count": incomes_count,
-        "expenses_count": expenses_count,
-        "total_amount": total_amt,
-        "message": f"{len(parsed_items)} lançamentos importados ({incomes_count} entradas e {expenses_count} saídas)!"
-    }
 
 @app.post("/api/finances/paste")
 def paste_finance_text(data: PasteImportRequest, db: Session = Depends(get_db)):

@@ -2006,17 +2006,22 @@ async function handleUploadInvoiceFile(event) {
             body: formData
         });
 
-        if (res.ok) {
-            const data = await res.json();
+        let data = null;
+        try {
+            data = await res.json();
+        } catch (_) {}
+
+        if (res.ok && data) {
             showToast(data.message || `${data.imported_count} transações importadas com sucesso!`, 'success');
             closeUploadInvoiceModal();
             loadFinanceData();
             loadStats();
         } else {
-            const err = await res.json();
-            showToast(err.detail || 'Erro ao processar arquivo.', 'error');
+            const errorMsg = (data && data.detail) ? data.detail : `Erro ao processar arquivo (Status: ${res.status})`;
+            showToast(errorMsg, 'error');
         }
     } catch (e) {
+        console.error("Erro ao enviar arquivo:", e);
         showToast('Erro de conexão ao enviar arquivo.', 'error');
     } finally {
         btn.disabled = false;
@@ -2041,17 +2046,22 @@ async function handlePasteInvoiceText(event) {
             body: JSON.stringify({ content })
         });
 
-        if (res.ok) {
-            const data = await res.json();
+        let data = null;
+        try {
+            data = await res.json();
+        } catch (_) {}
+
+        if (res.ok && data) {
             showToast(data.message || `${data.imported_count} transações importadas!`, 'success');
             closeUploadInvoiceModal();
             loadFinanceData();
             loadStats();
         } else {
-            const err = await res.json();
-            showToast(err.detail || 'Erro ao processar texto.', 'error');
+            const errorMsg = (data && data.detail) ? data.detail : `Erro ao processar texto (Status: ${res.status})`;
+            showToast(errorMsg, 'error');
         }
     } catch (e) {
+        console.error("Erro ao enviar texto:", e);
         showToast('Erro de conexão ao enviar texto.', 'error');
     }
 }
