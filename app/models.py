@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Float, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -118,4 +118,27 @@ class JobOpportunity(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class FinanceTransaction(Base):
+    __tablename__ = "finance_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False, index=True)
+    month_year = Column(String(7), nullable=False, index=True) # Formato: YYYY-MM
+    title = Column(String(255), nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    category = Column(String(100), default="Outros", index=True)
+    original_category = Column(String(100), nullable=True)
+    payment_method = Column(String(100), default="Cartão Nubank")
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class FinanceCategoryRule(Base):
+    __tablename__ = "finance_category_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    keyword = Column(String(100), unique=True, nullable=False)
+    category_name = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 

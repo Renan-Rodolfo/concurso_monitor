@@ -59,6 +59,8 @@ function switchTab(tabName) {
         loadJobQueries();
         loadJobOpportunities();
         loadSmartTerms();
+    } else if (tabName === 'finances') {
+        loadFinanceData();
     }
 }
 
@@ -1465,4 +1467,652 @@ async function saveJobFromSmartSearch(btn, index) {
         showToast('Erro de conexão.', 'error');
     }
 }
+
+// =========================================================================
+// --- MÓDULO DE ANÁLISE FINANCEIRA & FATURA NUBANK ---
+// =========================================================================
+
+let currentFinanceMonth = 'Todos';
+let financeTransactions = [];
+let monthlyChartInstance = null;
+let categoryChartInstance = null;
+let currentImportTab = 'file';
+
+const categoryMeta = {
+    "Alimentação": { icon: "fa-utensils", color: "#f97316", bg: "bg-orange-500/10", text: "text-orange-400", border: "border-orange-500/30" },
+    "Transporte": { icon: "fa-car", color: "#38bdf8", bg: "bg-sky-500/10", text: "text-sky-400", border: "border-sky-500/30" },
+    "Moradia": { icon: "fa-house", color: "#a855f7", bg: "bg-purple-500/10", text: "text-purple-400", border: "border-purple-500/30" },
+    "Assinaturas & Lazer": { icon: "fa-film", color: "#ec4899", bg: "bg-pink-500/10", text: "text-pink-400", border: "border-pink-500/30" },
+    "Compras": { icon: "fa-bag-shopping", color: "#eab308", bg: "bg-yellow-500/10", text: "text-yellow-400", border: "border-yellow-500/30" },
+    "Saúde": { icon: "fa-heart-pulse", color: "#ef4444", bg: "bg-rose-500/10", text: "text-rose-400", border: "border-rose-500/30" },
+    "Educação": { icon: "fa-graduation-cap", color: "#10b981", bg: "bg-emerald-500/10", text: "text-emerald-400", border: "border-emerald-500/30" },
+    "Serviços & Tarifas": { icon: "fa-receipt", color: "#64748b", bg: "bg-slate-500/10", text: "text-slate-400", border: "border-slate-500/30" },
+    "Outros": { icon: "fa-box-archive", color: "#94a3b8", bg: "bg-slate-700/30", text: "text-slate-300", border: "border-slate-600" }
+};
+
+function formatCurrency(val) {
+    return Number(val || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function formatDateBR(dateStr) {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+}
+
+// Carregar Dados Financeiros Principais
+async function loadFinanceData(month = null) {
+    const targetMonth = month || currentFinanceMonth || 'Todos';
+    try {
+        const [summaryRes, txRes] = await Promise.all([
+            fetch(`/api/finances/summary?month=${encodeURIComponent(targetMonth)}`),
+            fetch(`/api/finances/transactions?month=${encodeURIComponent(targetMonth)}`)
+        ]);
+
+        if (summaryRes.ok && txRes.ok) {
+            const summary = await summaryRes.json();
+            financeTransactions = await txRes.json();
+
+            updateFinanceMonthSelect(summary.available_months, targetMonth);
+            updateFinanceMetricCards(summary);
+            renderFinanceCharts(summary);
+            renderCategoryBreakdown(summary.categories_breakdown, summary.total_spent);
+            filterFinanceTransactions();
+        }
+    } catch (e) {
+        console.error("Erro ao carregar dados financeiros:", e);
+        showToast("Erro ao carregar análise financeira.", "error");
+    }
+}
+
+// Atualizar Seletor de Meses
+function updateFinanceMonthSelect(availableMonths, selectedMonth) {
+    const select = document.getElementById('finance-month-select');
+    if (!select) return;
+
+    let html = `<option value="Todos" ${selectedMonth === 'Todos' ? 'selected' : ''}>📅 Todos os Meses</option>`;
+    (availableMonths || []).forEach(m => {
+        const [year, month] = m.split('-');
+        const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+        const label = `${monthNames[parseInt(month, 10) - 1]}/${year}`;
+        html += `<option value="${m}" ${selectedMonth === m ? 'selected' : ''}>${label} (${m})</option>`;
+    });
+    select.innerHTML = html;
+}
+
+function handleFinanceMonthChange() {
+    const select = document.getElementById('finance-month-select');
+    currentFinanceMonth = select.value;
+    loadFinanceData(currentFinanceMonth);
+}
+
+// Atualizar Cards de Métricas
+function updateFinanceMetricCards(summary) {
+    document.getElementById('fin-stat-total').innerText = formatCurrency(summary.total_spent);
+    document.getElementById('fin-stat-avg').innerText = `${formatCurrency(summary.avg_monthly)}/mês`;
+    document.getElementById('fin-stat-count').innerText = `${summary.total_transactions} txs`;
+    
+    const topCatEl = document.getElementById('fin-stat-top-cat');
+    const topCatPctEl = document.getElementById('fin-stat-top-cat-pct');
+    topCatEl.innerText = summary.top_category || 'N/A';
+    topCatPctEl.innerText = `${summary.top_category_percent}% do total (${formatCurrency(summary.top_category_amount)})`;
+
+    const subEl = document.getElementById('fin-stat-total-sub');
+    if (summary.selected_month && summary.selected_month !== 'Todos') {
+        subEl.innerText = `referente ao mês ${summary.selected_month}`;
+    } else {
+        subEl.innerText = 'acumulado em todos os meses';
+    }
+}
+
+// Renderizar Gráficos com Chart.js
+function renderFinanceCharts(summary) {
+    // 1. Gráfico de Evolução Mensal (Bar Chart)
+    const monthlyCanvas = document.getElementById('finance-monthly-chart');
+    if (monthlyCanvas && summary.monthly_breakdown) {
+        if (monthlyChartInstance) monthlyChartInstance.destroy();
+
+        const labels = summary.monthly_breakdown.map(item => {
+            const [y, m] = item.month_year.split('-');
+            const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+            return `${monthNames[parseInt(m, 10) - 1]}/${y.substring(2)}`;
+        });
+        const dataValues = summary.monthly_breakdown.map(item => item.total);
+
+        monthlyChartInstance = new Chart(monthlyCanvas, {
+            type: 'bar',
+            data: {
+                labels: labels.length ? labels : ['Sem dados'],
+                datasets: [{
+                    label: 'Gasto Mensal (R$)',
+                    data: dataValues.length ? dataValues : [0],
+                    backgroundColor: 'rgba(245, 158, 11, 0.75)',
+                    borderColor: '#f59e0b',
+                    borderWidth: 1.5,
+                    borderRadius: 8,
+                    maxBarThickness: 45
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ` Total: ${formatCurrency(ctx.raw)}`
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: 'rgba(51, 65, 85, 0.4)' },
+                        ticks: { color: '#94a3b8', font: { size: 11 } }
+                    },
+                    y: {
+                        grid: { color: 'rgba(51, 65, 85, 0.4)' },
+                        ticks: {
+                            color: '#94a3b8',
+                            font: { size: 11 },
+                            callback: (v) => `R$ ${v}`
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 2. Gráfico de Distribuição por Categoria (Doughnut Chart)
+    const categoryCanvas = document.getElementById('finance-category-chart');
+    if (categoryCanvas && summary.categories_breakdown) {
+        if (categoryChartInstance) categoryChartInstance.destroy();
+
+        const cats = summary.categories_breakdown;
+        const catLabels = cats.map(c => c.category);
+        const catData = cats.map(c => c.total);
+        const catColors = cats.map(c => (categoryMeta[c.category] ? categoryMeta[c.category].color : '#94a3b8'));
+
+        categoryChartInstance = new Chart(categoryCanvas, {
+            type: 'doughnut',
+            data: {
+                labels: catLabels.length ? catLabels : ['Sem dados'],
+                datasets: [{
+                    data: catData.length ? catData : [1],
+                    backgroundColor: catColors.length ? catColors : ['#334155'],
+                    borderWidth: 2,
+                    borderColor: '#1e293b'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            color: '#cbd5e1',
+                            font: { size: 10 },
+                            boxWidth: 12,
+                            padding: 10
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ` ${ctx.label}: ${formatCurrency(ctx.raw)}`
+                        }
+                    }
+                },
+                cutout: '68%'
+            }
+        });
+    }
+}
+
+// Renderizar Painel de Categorias com Barras de Progresso
+function renderCategoryBreakdown(categories, totalSpent) {
+    const container = document.getElementById('finance-categories-grid');
+    if (!container) return;
+
+    if (!categories || categories.length === 0) {
+        container.innerHTML = `
+            <div class="col-span-full py-6 text-center text-slate-500 text-sm">
+                Nenhum dado importado. Importe uma fatura para ver a somatória por categoria.
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = categories.map(cat => {
+        const meta = categoryMeta[cat.category] || categoryMeta["Outros"];
+        return `
+            <div class="bg-slate-900/70 border border-slate-700/60 rounded-xl p-4 flex flex-col justify-between shadow-sm hover:border-slate-600 transition-all">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="inline-flex items-center gap-2 text-xs font-semibold ${meta.text}">
+                        <i class="fa-solid ${meta.icon}"></i> ${cat.category}
+                    </span>
+                    <span class="text-xs font-bold text-slate-300">${cat.percentage}%</span>
+                </div>
+                <div class="space-y-1.5">
+                    <p class="text-lg font-bold text-white">${formatCurrency(cat.total)}</p>
+                    <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                        <div class="h-full rounded-full transition-all duration-500" style="width: ${cat.percentage}%; background-color: ${meta.color};"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Filtrar e Renderizar Tabela de Lançamentos
+function filterFinanceTransactions() {
+    const search = (document.getElementById('finance-search-input')?.value || '').toLowerCase().trim();
+    const category = document.getElementById('finance-category-filter')?.value || 'Todas';
+
+    let filtered = financeTransactions;
+
+    if (category !== 'Todas') {
+        filtered = filtered.filter(t => t.category === category);
+    }
+
+    if (search) {
+        filtered = filtered.filter(t => 
+            (t.title && t.title.toLowerCase().includes(search)) ||
+            (t.payment_method && t.payment_method.toLowerCase().includes(search))
+        );
+    }
+
+    renderFinanceTable(filtered);
+}
+
+function renderFinanceTable(transactions) {
+    const tbody = document.getElementById('finance-tbody');
+    const countEl = document.getElementById('finance-table-count');
+    if (!tbody) return;
+
+    if (countEl) {
+        countEl.innerText = `${transactions.length} lançamentos`;
+    }
+
+    if (!transactions || transactions.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="py-10 text-center text-slate-500">
+                    Nenhuma transação encontrada com os filtros selecionados.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    const availableCategories = Object.keys(categoryMeta);
+
+    tbody.innerHTML = transactions.map(t => {
+        const meta = categoryMeta[t.category] || categoryMeta["Outros"];
+        
+        const catOptions = availableCategories.map(c => `
+            <option value="${c}" ${c === t.category ? 'selected' : ''}>${c}</option>
+        `).join('');
+
+        return `
+            <tr class="hover:bg-slate-700/20 transition-colors">
+                <td class="py-3 px-4 text-xs text-slate-400 whitespace-nowrap">
+                    ${formatDateBR(t.date)}
+                </td>
+                <td class="py-3 px-4 font-medium text-white">
+                    ${t.title}
+                </td>
+                <td class="py-3 px-4">
+                    <select onchange="handleUpdateTransactionCategory(${t.id}, this.value)" 
+                            class="bg-slate-900 border ${meta.border} ${meta.text} text-xs font-semibold rounded-lg px-2.5 py-1 focus:outline-none cursor-pointer">
+                        ${catOptions}
+                    </select>
+                </td>
+                <td class="py-3 px-4 text-xs text-slate-400">
+                    ${t.payment_method || 'Cartão Nubank'}
+                </td>
+                <td class="py-3 px-4 text-right font-bold text-emerald-400 whitespace-nowrap">
+                    ${formatCurrency(t.amount)}
+                </td>
+                <td class="py-3 px-4 text-center">
+                    <button onclick="handleDeleteTransaction(${t.id})" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="Excluir Lançamento">
+                        <i class="fa-solid fa-trash-can text-xs"></i>
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+// Alteração Inline de Categoria
+async function handleUpdateTransactionCategory(txId, newCategory) {
+    try {
+        const res = await fetch(`/api/finances/transactions/${txId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ category: newCategory })
+        });
+
+        if (res.ok) {
+            showToast(`Categoria atualizada para "${newCategory}"!`);
+            // Recarregar dados para recalcular somas e gráficos
+            loadFinanceData(currentFinanceMonth);
+        } else {
+            showToast('Erro ao atualizar categoria.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao atualizar.', 'error');
+    }
+}
+
+// Excluir Lançamento Individual
+async function handleDeleteTransaction(txId) {
+    if (!confirm('Deseja realmente excluir este lançamento?')) return;
+
+    try {
+        const res = await fetch(`/api/finances/transactions/${txId}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Lançamento excluído com sucesso.');
+            loadFinanceData(currentFinanceMonth);
+            loadStats();
+        } else {
+            showToast('Erro ao excluir lançamento.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao excluir.', 'error');
+    }
+}
+
+// Limpar Lançamentos
+async function handleClearFinances() {
+    const isFiltered = currentFinanceMonth && currentFinanceMonth !== 'Todos';
+    const msg = isFiltered 
+        ? `Deseja apagar TODOS os lançamentos do mês ${currentFinanceMonth}?`
+        : 'Deseja apagar TODOS os lançamentos financeiros importados no sistema?';
+
+    if (!confirm(msg)) return;
+
+    try {
+        const url = isFiltered 
+            ? `/api/finances/clear?month=${encodeURIComponent(currentFinanceMonth)}`
+            : '/api/finances/clear';
+
+        const res = await fetch(url, { method: 'DELETE' });
+        if (res.ok) {
+            const data = await res.json();
+            showToast(data.message || 'Lançamentos apagados.');
+            currentFinanceMonth = 'Todos';
+            loadFinanceData('Todos');
+            loadStats();
+        } else {
+            showToast('Erro ao limpar lançamentos.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao limpar.', 'error');
+    }
+}
+
+// --- MODAL DE IMPORTAÇÃO DE FATURAS ---
+
+function openUploadInvoiceModal() {
+    document.getElementById('modal-import-invoice').classList.remove('hidden');
+    switchImportTab('file');
+}
+
+function closeUploadInvoiceModal() {
+    document.getElementById('modal-import-invoice').classList.add('hidden');
+    document.getElementById('invoice-file-input').value = '';
+    document.getElementById('selected-file-label').innerText = 'Nenhum arquivo selecionado';
+    document.getElementById('invoice-paste-textarea').value = '';
+}
+
+function switchImportTab(tab) {
+    currentImportTab = tab;
+    const btnFile = document.getElementById('btn-import-tab-file');
+    const btnPaste = document.getElementById('btn-import-tab-paste');
+    const paneFile = document.getElementById('import-pane-file');
+    const panePaste = document.getElementById('import-pane-paste');
+
+    if (tab === 'file') {
+        btnFile.className = 'flex-1 py-2 text-xs font-semibold rounded-lg bg-amber-600 text-white transition-all';
+        btnPaste.className = 'flex-1 py-2 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition-all';
+        paneFile.classList.remove('hidden');
+        panePaste.classList.add('hidden');
+    } else {
+        btnPaste.className = 'flex-1 py-2 text-xs font-semibold rounded-lg bg-amber-600 text-white transition-all';
+        btnFile.className = 'flex-1 py-2 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition-all';
+        panePaste.classList.remove('hidden');
+        paneFile.classList.add('hidden');
+    }
+}
+
+function handleFileSelected(event) {
+    const file = event.target.files[0];
+    const label = document.getElementById('selected-file-label');
+    if (file) {
+        label.innerText = `📄 ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+        label.className = 'inline-block bg-amber-500/20 text-amber-300 text-xs px-3 py-1.5 rounded-lg border border-amber-500/30';
+    } else {
+        label.innerText = 'Nenhum arquivo selecionado';
+        label.className = 'inline-block bg-slate-800 text-amber-300 text-xs px-3 py-1.5 rounded-lg border border-slate-700';
+    }
+}
+
+async function handleUploadInvoiceFile(event) {
+    event.preventDefault();
+    const fileInput = document.getElementById('invoice-file-input');
+    const file = fileInput.files[0];
+
+    if (!file) {
+        showToast('Por favor, selecione um arquivo CSV ou OFX da fatura.', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('btn-submit-upload');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processando...';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const res = await fetch('/api/finances/upload', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            showToast(data.message || `${data.imported_count} transações importadas com sucesso!`, 'success');
+            closeUploadInvoiceModal();
+            loadFinanceData();
+            loadStats();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Erro ao processar arquivo.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao enviar arquivo.', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-upload"></i> Processar Fatura';
+    }
+}
+
+async function handlePasteInvoiceText(event) {
+    event.preventDefault();
+    const textarea = document.getElementById('invoice-paste-textarea');
+    const content = textarea.value.trim();
+
+    if (!content) {
+        showToast('Cole o conteúdo da fatura antes de prosseguir.', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/finances/paste', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            showToast(data.message || `${data.imported_count} transações importadas!`, 'success');
+            closeUploadInvoiceModal();
+            loadFinanceData();
+            loadStats();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Erro ao processar texto.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao enviar texto.', 'error');
+    }
+}
+
+// --- MODAL DE GASTO MANUAL ---
+
+function openAddTransactionModal() {
+    document.getElementById('modal-finance-manual').classList.remove('hidden');
+    document.getElementById('fin-manual-date').value = new Date().toISOString().split('T')[0];
+}
+
+function closeAddTransactionModal() {
+    document.getElementById('modal-finance-manual').classList.add('hidden');
+    document.getElementById('fin-manual-title').value = '';
+    document.getElementById('fin-manual-amount').value = '';
+}
+
+async function handleAddManualTransaction(event) {
+    event.preventDefault();
+    const date = document.getElementById('fin-manual-date').value;
+    const title = document.getElementById('fin-manual-title').value.trim();
+    const amount = parseFloat(document.getElementById('fin-manual-amount').value);
+    const category = document.getElementById('fin-manual-category').value;
+    const method = document.getElementById('fin-manual-method').value.trim() || 'Cartão Nubank';
+
+    if (!title || isNaN(amount) || amount <= 0) {
+        showToast('Preencha os campos obrigatórios corretamente.', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/finances/transactions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                date,
+                title,
+                amount,
+                category,
+                payment_method: method
+            })
+        });
+
+        if (res.ok) {
+            showToast('Lançamento salvo com sucesso!');
+            closeAddTransactionModal();
+            loadFinanceData(currentFinanceMonth);
+            loadStats();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Erro ao cadastrar gasto.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão.', 'error');
+    }
+}
+
+// --- MODAL DE REGRAS DE CATEGORIZAÇÃO ---
+
+function openRulesModal() {
+    document.getElementById('modal-finance-rules').classList.remove('hidden');
+    loadFinanceRules();
+}
+
+function closeRulesModal() {
+    document.getElementById('modal-finance-rules').classList.add('hidden');
+    document.getElementById('input-rule-keyword').value = '';
+}
+
+async function loadFinanceRules() {
+    const listContainer = document.getElementById('finance-rules-list');
+    if (!listContainer) return;
+
+    try {
+        const res = await fetch('/api/finances/rules');
+        if (res.ok) {
+            const rules = await res.json();
+            if (rules.length === 0) {
+                listContainer.innerHTML = '<p class="text-xs text-slate-500 italic p-2">Nenhuma regra customizada cadastrada ainda.</p>';
+                return;
+            }
+
+            listContainer.innerHTML = rules.map(r => `
+                <div class="flex items-center justify-between p-2 bg-slate-900/80 rounded-lg border border-slate-700/60 text-xs">
+                    <div class="flex items-center gap-2">
+                        <span class="font-mono text-purple-300 font-semibold">"${r.keyword}"</span>
+                        <i class="fa-solid fa-arrow-right text-[10px] text-slate-500"></i>
+                        <span class="text-slate-200">${r.category_name}</span>
+                    </div>
+                    <button onclick="handleDeleteRule(${r.id})" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="Excluir regra">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            `).join('');
+        }
+    } catch (e) {
+        listContainer.innerHTML = '<p class="text-xs text-rose-400">Erro ao carregar regras.</p>';
+    }
+}
+
+async function handleAddRule(event) {
+    event.preventDefault();
+    const keywordInput = document.getElementById('input-rule-keyword');
+    const categorySelect = document.getElementById('input-rule-category');
+
+    const keyword = keywordInput.value.trim();
+    const category_name = categorySelect.value;
+
+    if (!keyword) return;
+
+    try {
+        const res = await fetch('/api/finances/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyword, category_name })
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            showToast(data.message || 'Regra salva com sucesso!');
+            keywordInput.value = '';
+            loadFinanceRules();
+            loadFinanceData(currentFinanceMonth);
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Erro ao cadastrar regra.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão.', 'error');
+    }
+}
+
+async function handleDeleteRule(ruleId) {
+    try {
+        const res = await fetch(`/api/finances/rules/${ruleId}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast('Regra removida.');
+            loadFinanceRules();
+        } else {
+            showToast('Erro ao excluir regra.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão.', 'error');
+    }
+}
+
 
