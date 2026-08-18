@@ -128,6 +128,7 @@ class TransactionCreate(BaseModel):
     date: str
     title: str
     amount: float
+    transaction_type: Optional[str] = "expense"
     category: Optional[str] = "Outros"
     payment_method: Optional[str] = "Cartão Nubank"
     notes: Optional[str] = None
@@ -136,6 +137,7 @@ class TransactionUpdate(BaseModel):
     date: Optional[str] = None
     title: Optional[str] = None
     amount: Optional[float] = None
+    transaction_type: Optional[str] = None
     category: Optional[str] = None
     payment_method: Optional[str] = None
     notes: Optional[str] = None
@@ -704,7 +706,7 @@ def get_stats(db: Session = Depends(get_db)):
 
 @app.get("/api/finances/summary")
 def get_finance_summary(month: Optional[str] = None, db: Session = Depends(get_db)):
-    """Retorna métricas consolidadas, dados para gráficos e distribuição por categoria."""
+    """Retorna métricas consolidadas de Entradas, Saídas, Saldo Líquido e dados para gráficos."""
     all_transactions = db.query(models.FinanceTransaction).all()
     
     # Calcular resumo geral de todos os meses
@@ -718,21 +720,27 @@ def get_finance_summary(month: Optional[str] = None, db: Session = Depends(get_d
         return {
             "selected_month": month,
             "total_spent": month_summary["total_spent"],
+            "total_income": month_summary["total_income"],
+            "net_balance": month_summary["net_balance"],
             "total_transactions": month_summary["total_transactions"],
             "avg_monthly": global_summary["avg_monthly"],
+            "avg_monthly_income": global_summary["avg_monthly_income"],
             "top_category": month_summary["top_category"],
             "top_category_amount": month_summary["top_category_amount"],
             "top_category_percent": month_summary["top_category_percent"],
             "available_months": global_summary["available_months"],
             "categories_breakdown": month_summary["categories_breakdown"],
-            "monthly_breakdown": global_summary["monthly_breakdown"], # Mantém o histórico completo para o gráfico de linha/barra
+            "monthly_breakdown": global_summary["monthly_breakdown"],
         }
     
     return {
         "selected_month": "Todos",
         "total_spent": global_summary["total_spent"],
+        "total_income": global_summary["total_income"],
+        "net_balance": global_summary["net_balance"],
         "total_transactions": global_summary["total_transactions"],
         "avg_monthly": global_summary["avg_monthly"],
+        "avg_monthly_income": global_summary["avg_monthly_income"],
         "top_category": global_summary["top_category"],
         "top_category_amount": global_summary["top_category_amount"],
         "top_category_percent": global_summary["top_category_percent"],
@@ -745,16 +753,19 @@ def get_finance_summary(month: Optional[str] = None, db: Session = Depends(get_d
 def get_finance_transactions(
     month: Optional[str] = None,
     category: Optional[str] = None,
+    tx_type: Optional[str] = None,
     search: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """Lista as transações financeiras com suporte a filtros por mês, categoria e busca textual."""
+    """Lista as transações financeiras com suporte a filtros por mês, categoria, tipo (entrada/saída) e busca textual."""
     query = db.query(models.FinanceTransaction)
     
     if month and month != "Todos":
         query = query.filter(models.FinanceTransaction.month_year == month)
     if category and category != "Todas":
         query = query.filter(models.FinanceTransaction.category == category)
+    if tx_type and tx_type in ["income", "expense"]:
+        query = query.filter(models.FinanceTransaction.transaction_type == tx_type)
     if search:
         search_clean = search.strip()
         query = query.filter(models.FinanceTransaction.title.ilike(f"%{search_clean}%"))
@@ -763,25 +774,26 @@ def get_finance_transactions(
 
 @app.post("/api/finances/transactions")
 def create_finance_transaction(data: TransactionCreate, db: Session = Depends(get_db)):
-    """Adiciona manualmente um gasto/transação."""
+    """Adiciona manualmente um gasto ou entrada."""
     clean_title = data.title.strip()
     if not clean_title:
         raise HTTPException(status_code=400, detail="Título do lançamento é obrigatório")
 
     dt_obj, month_year = finance.parse_date_str(data.date)
+    tx_type = data.transaction_type or "expense"
     
-    # Categorização inteligente se não especificada ou deixada como Outros
-    category = data.category.strip() if data.category else "Outros"
+    category = data.category.strip() if data.category else ("Entradas" if tx_type == "income" else "Outros")
     if category in ["Outros", ""]:
         rules = db.query(models.FinanceCategoryRule).all()
         rule_dicts = [{"keyword": r.keyword, "category_name": r.category_name} for r in rules]
-        category = finance.categorize_transaction(clean_title, None, rule_dicts)
+        category = finance.categorize_transaction(clean_title, None, rule_dicts, tx_type=tx_type)
 
     new_tx = models.FinanceTransaction(
         date=dt_obj,
         month_year=month_year,
         title=clean_title,
         amount=finance.parse_amount(data.amount),
+        transaction_type=tx_type,
         category=category,
         payment_method=data.payment_method.strip() if data.payment_method else "Cartão Nubank",
         notes=data.notes.strip() if data.notes else None
@@ -793,7 +805,7 @@ def create_finance_transaction(data: TransactionCreate, db: Session = Depends(ge
 
 @app.put("/api/finances/transactions/{tx_id}")
 def update_finance_transaction(tx_id: int, data: TransactionUpdate, db: Session = Depends(get_db)):
-    """Atualiza dados de uma transação (como categoria, valor ou notas)."""
+    """Atualiza dados de uma transação (como tipo, categoria, valor ou notas)."""
     tx = db.query(models.FinanceTransaction).filter(models.FinanceTransaction.id == tx_id).first()
     if not tx:
         raise HTTPException(status_code=404, detail="Lançamento não encontrado")
@@ -802,6 +814,8 @@ def update_finance_transaction(tx_id: int, data: TransactionUpdate, db: Session 
         tx.title = data.title.strip()
     if data.amount is not None:
         tx.amount = finance.parse_amount(data.amount)
+    if data.transaction_type is not None:
+        tx.transaction_type = data.transaction_type.strip()
     if data.category is not None:
         tx.category = data.category.strip()
     if data.payment_method is not None:
@@ -861,9 +875,10 @@ async def upload_finance_file(file: UploadFile = File(...), db: Session = Depend
             month_year=item["month_year"],
             title=item["title"],
             amount=item["amount"],
+            transaction_type=item.get("transaction_type", "expense"),
             category=item["category"],
             original_category=item.get("original_category"),
-            payment_method=item.get("payment_method", "Cartão Nubank")
+            payment_method=item.get("payment_method", "Extrato / Cartão Nubank")
         )
         db.add(new_tx)
         db_items.append(new_tx)
@@ -871,11 +886,15 @@ async def upload_finance_file(file: UploadFile = File(...), db: Session = Depend
     db.commit()
 
     total_amt = round(sum([i["amount"] for i in parsed_items]), 2)
+    incomes_count = sum(1 for i in parsed_items if i.get("transaction_type") == "income")
+    expenses_count = len(parsed_items) - incomes_count
     return {
         "status": "success",
         "imported_count": len(parsed_items),
+        "incomes_count": incomes_count,
+        "expenses_count": expenses_count,
         "total_amount": total_amt,
-        "message": f"{len(parsed_items)} lançamentos importados com sucesso (Total: R$ {total_amt:,.2f})!"
+        "message": f"{len(parsed_items)} lançamentos importados ({incomes_count} entradas e {expenses_count} saídas)!"
     }
 
 @app.post("/api/finances/paste")
@@ -897,9 +916,10 @@ def paste_finance_text(data: PasteImportRequest, db: Session = Depends(get_db)):
             month_year=item["month_year"],
             title=item["title"],
             amount=item["amount"],
+            transaction_type=item.get("transaction_type", "expense"),
             category=item["category"],
             original_category=item.get("original_category"),
-            payment_method=data.default_payment_method or "Cartão Nubank"
+            payment_method=data.default_payment_method or "Fatura / Extrato Nubank"
         )
         db.add(new_tx)
 

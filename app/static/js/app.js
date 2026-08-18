@@ -1479,6 +1479,7 @@ let categoryChartInstance = null;
 let currentImportTab = 'file';
 
 const categoryMeta = {
+    "Entradas": { icon: "fa-arrow-down-long", color: "#22c55e", bg: "bg-emerald-500/10", text: "text-emerald-400", border: "border-emerald-500/30" },
     "Alimentação": { icon: "fa-utensils", color: "#f97316", bg: "bg-orange-500/10", text: "text-orange-400", border: "border-orange-500/30" },
     "Transporte": { icon: "fa-car", color: "#38bdf8", bg: "bg-sky-500/10", text: "text-sky-400", border: "border-sky-500/30" },
     "Moradia": { icon: "fa-house", color: "#a855f7", bg: "bg-purple-500/10", text: "text-purple-400", border: "border-purple-500/30" },
@@ -1551,26 +1552,45 @@ function handleFinanceMonthChange() {
 
 // Atualizar Cards de Métricas
 function updateFinanceMetricCards(summary) {
-    document.getElementById('fin-stat-total').innerText = formatCurrency(summary.total_spent);
-    document.getElementById('fin-stat-avg').innerText = `${formatCurrency(summary.avg_monthly)}/mês`;
-    document.getElementById('fin-stat-count').innerText = `${summary.total_transactions} txs`;
-    
-    const topCatEl = document.getElementById('fin-stat-top-cat');
-    const topCatPctEl = document.getElementById('fin-stat-top-cat-pct');
-    topCatEl.innerText = summary.top_category || 'N/A';
-    topCatPctEl.innerText = `${summary.top_category_percent}% do total (${formatCurrency(summary.top_category_amount)})`;
+    // 1. Total Entradas (Receitas)
+    const incomeEl = document.getElementById('fin-stat-income');
+    if (incomeEl) {
+        incomeEl.innerText = `+ ${formatCurrency(summary.total_income)}`;
+    }
+
+    // 2. Total Saídas (Despesas)
+    const totalEl = document.getElementById('fin-stat-total');
+    if (totalEl) {
+        totalEl.innerText = `- ${formatCurrency(summary.total_spent)}`;
+    }
+
+    // 3. Saldo Líquido
+    const balanceEl = document.getElementById('fin-stat-balance');
+    if (balanceEl) {
+        const isPos = (summary.net_balance || 0) >= 0;
+        balanceEl.innerText = `${isPos ? '+' : ''} ${formatCurrency(summary.net_balance)}`;
+        balanceEl.className = isPos ? 'text-2xl font-bold text-emerald-400' : 'text-2xl font-bold text-rose-400';
+    }
+
+    // 4. Média de Gastos
+    const avgEl = document.getElementById('fin-stat-avg');
+    if (avgEl) {
+        avgEl.innerText = `${formatCurrency(summary.avg_monthly)}/mês`;
+    }
 
     const subEl = document.getElementById('fin-stat-total-sub');
-    if (summary.selected_month && summary.selected_month !== 'Todos') {
-        subEl.innerText = `referente ao mês ${summary.selected_month}`;
-    } else {
-        subEl.innerText = 'acumulado em todos os meses';
+    if (subEl) {
+        if (summary.selected_month && summary.selected_month !== 'Todos') {
+            subEl.innerText = `referente ao mês ${summary.selected_month}`;
+        } else {
+            subEl.innerText = 'acumulado no período';
+        }
     }
 }
 
 // Renderizar Gráficos com Chart.js
 function renderFinanceCharts(summary) {
-    // 1. Gráfico de Evolução Mensal (Bar Chart)
+    // 1. Gráfico de Evolução Mensal (Comparativo: Entradas vs Saídas)
     const monthlyCanvas = document.getElementById('finance-monthly-chart');
     if (monthlyCanvas && summary.monthly_breakdown) {
         if (monthlyChartInstance) monthlyChartInstance.destroy();
@@ -1580,30 +1600,51 @@ function renderFinanceCharts(summary) {
             const monthNames = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
             return `${monthNames[parseInt(m, 10) - 1]}/${y.substring(2)}`;
         });
-        const dataValues = summary.monthly_breakdown.map(item => item.total);
+        const incomeValues = summary.monthly_breakdown.map(item => item.total_income || 0);
+        const expenseValues = summary.monthly_breakdown.map(item => item.total_expense || item.total || 0);
 
         monthlyChartInstance = new Chart(monthlyCanvas, {
             type: 'bar',
             data: {
                 labels: labels.length ? labels : ['Sem dados'],
-                datasets: [{
-                    label: 'Gasto Mensal (R$)',
-                    data: dataValues.length ? dataValues : [0],
-                    backgroundColor: 'rgba(245, 158, 11, 0.75)',
-                    borderColor: '#f59e0b',
-                    borderWidth: 1.5,
-                    borderRadius: 8,
-                    maxBarThickness: 45
-                }]
+                datasets: [
+                    {
+                        label: '🟢 Entradas (R$)',
+                        data: incomeValues.length ? incomeValues : [0],
+                        backgroundColor: 'rgba(34, 197, 94, 0.8)',
+                        borderColor: '#22c55e',
+                        borderWidth: 1.5,
+                        borderRadius: 6,
+                        maxBarThickness: 32
+                    },
+                    {
+                        label: '🔴 Saídas (R$)',
+                        data: expenseValues.length ? expenseValues : [0],
+                        backgroundColor: 'rgba(245, 158, 11, 0.8)',
+                        borderColor: '#f59e0b',
+                        borderWidth: 1.5,
+                        borderRadius: 6,
+                        maxBarThickness: 32
+                    }
+                ]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
-                    legend: { display: false },
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            color: '#cbd5e1',
+                            font: { size: 11 },
+                            boxWidth: 12,
+                            padding: 10
+                        }
+                    },
                     tooltip: {
                         callbacks: {
-                            label: (ctx) => ` Total: ${formatCurrency(ctx.raw)}`
+                            label: (ctx) => ` ${ctx.dataset.label}: ${formatCurrency(ctx.raw)}`
                         }
                     }
                 },
@@ -1625,7 +1666,7 @@ function renderFinanceCharts(summary) {
         });
     }
 
-    // 2. Gráfico de Distribuição por Categoria (Doughnut Chart)
+    // 2. Gráfico de Distribuição por Categoria de Despesa (Doughnut Chart)
     const categoryCanvas = document.getElementById('finance-category-chart');
     if (categoryCanvas && summary.categories_breakdown) {
         if (categoryChartInstance) categoryChartInstance.destroy();
@@ -1679,7 +1720,7 @@ function renderCategoryBreakdown(categories, totalSpent) {
     if (!categories || categories.length === 0) {
         container.innerHTML = `
             <div class="col-span-full py-6 text-center text-slate-500 text-sm">
-                Nenhum dado importado. Importe uma fatura para ver a somatória por categoria.
+                Nenhum gasto registrado. Importe uma fatura para ver as despesas por categoria.
             </div>
         `;
         return;
@@ -1710,8 +1751,13 @@ function renderCategoryBreakdown(categories, totalSpent) {
 function filterFinanceTransactions() {
     const search = (document.getElementById('finance-search-input')?.value || '').toLowerCase().trim();
     const category = document.getElementById('finance-category-filter')?.value || 'Todas';
+    const txType = document.getElementById('finance-type-filter')?.value || 'all';
 
     let filtered = financeTransactions;
+
+    if (txType !== 'all') {
+        filtered = filtered.filter(t => (t.transaction_type || 'expense') === txType);
+    }
 
     if (category !== 'Todas') {
         filtered = filtered.filter(t => t.category === category);
@@ -1739,8 +1785,8 @@ function renderFinanceTable(transactions) {
     if (!transactions || transactions.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="6" class="py-10 text-center text-slate-500">
-                    Nenhuma transação encontrada com os filtros selecionados.
+                <td colspan="7" class="py-10 text-center text-slate-500">
+                    Nenhuma movimentação encontrada com os filtros selecionados.
                 </td>
             </tr>
         `;
@@ -1750,7 +1796,8 @@ function renderFinanceTable(transactions) {
     const availableCategories = Object.keys(categoryMeta);
 
     tbody.innerHTML = transactions.map(t => {
-        const meta = categoryMeta[t.category] || categoryMeta["Outros"];
+        const isIncome = (t.transaction_type === 'income');
+        const meta = categoryMeta[t.category] || (isIncome ? categoryMeta["Entradas"] : categoryMeta["Outros"]);
         
         const catOptions = availableCategories.map(c => `
             <option value="${c}" ${c === t.category ? 'selected' : ''}>${c}</option>
@@ -1764,6 +1811,17 @@ function renderFinanceTable(transactions) {
                 <td class="py-3 px-4 font-medium text-white">
                     ${t.title}
                 </td>
+                <td class="py-3 px-4 text-center">
+                    <button onclick="handleToggleTransactionType(${t.id}, '${isIncome ? 'expense' : 'income'}')" 
+                            class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold transition-all ${
+                                isIncome 
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30' 
+                                    : 'bg-rose-500/20 text-rose-400 border border-rose-500/30 hover:bg-rose-500/30'
+                            }" title="Clique para alternar entre Entrada e Saída">
+                        <i class="fa-solid ${isIncome ? 'fa-arrow-down' : 'fa-arrow-up'}"></i>
+                        ${isIncome ? 'Entrada' : 'Saída'}
+                    </button>
+                </td>
                 <td class="py-3 px-4">
                     <select onchange="handleUpdateTransactionCategory(${t.id}, this.value)" 
                             class="bg-slate-900 border ${meta.border} ${meta.text} text-xs font-semibold rounded-lg px-2.5 py-1 focus:outline-none cursor-pointer">
@@ -1773,8 +1831,8 @@ function renderFinanceTable(transactions) {
                 <td class="py-3 px-4 text-xs text-slate-400">
                     ${t.payment_method || 'Cartão Nubank'}
                 </td>
-                <td class="py-3 px-4 text-right font-bold text-emerald-400 whitespace-nowrap">
-                    ${formatCurrency(t.amount)}
+                <td class="py-3 px-4 text-right font-bold whitespace-nowrap ${isIncome ? 'text-emerald-400' : 'text-rose-400'}">
+                    ${isIncome ? '+' : '-'} ${formatCurrency(t.amount)}
                 </td>
                 <td class="py-3 px-4 text-center">
                     <button onclick="handleDeleteTransaction(${t.id})" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="Excluir Lançamento">
@@ -1785,6 +1843,31 @@ function renderFinanceTable(transactions) {
         `;
     }).join('');
 }
+
+// Alternar Tipo de Transação (Entrada <-> Saída)
+async function handleToggleTransactionType(txId, newType) {
+    try {
+        const updateData = { transaction_type: newType };
+        if (newType === 'income') {
+            updateData.category = 'Entradas';
+        }
+        const res = await fetch(`/api/finances/transactions/${txId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updateData)
+        });
+
+        if (res.ok) {
+            showToast(`Movimentação alterada para ${newType === 'income' ? 'Entrada (+)' : 'Saída (-)'}!`);
+            loadFinanceData(currentFinanceMonth);
+        } else {
+            showToast('Erro ao alternar tipo.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão.', 'error');
+    }
+}
+
 
 // Alteração Inline de Categoria
 async function handleUpdateTransactionCategory(txId, newCategory) {
@@ -1986,11 +2069,22 @@ function closeAddTransactionModal() {
     document.getElementById('fin-manual-amount').value = '';
 }
 
+function handleManualTypeChange(type) {
+    const catSelect = document.getElementById('fin-manual-category');
+    if (!catSelect) return;
+    if (type === 'income') {
+        catSelect.value = 'Entradas';
+    } else if (catSelect.value === 'Entradas') {
+        catSelect.value = 'Outros';
+    }
+}
+
 async function handleAddManualTransaction(event) {
     event.preventDefault();
     const date = document.getElementById('fin-manual-date').value;
     const title = document.getElementById('fin-manual-title').value.trim();
     const amount = parseFloat(document.getElementById('fin-manual-amount').value);
+    const txType = document.getElementById('fin-manual-type')?.value || 'expense';
     const category = document.getElementById('fin-manual-category').value;
     const method = document.getElementById('fin-manual-method').value.trim() || 'Cartão Nubank';
 
@@ -2007,6 +2101,7 @@ async function handleAddManualTransaction(event) {
                 date,
                 title,
                 amount,
+                transaction_type: txType,
                 category,
                 payment_method: method
             })
@@ -2019,7 +2114,7 @@ async function handleAddManualTransaction(event) {
             loadStats();
         } else {
             const err = await res.json();
-            showToast(err.detail || 'Erro ao cadastrar gasto.', 'error');
+            showToast(err.detail || 'Erro ao cadastrar lançamento.', 'error');
         }
     } catch (e) {
         showToast('Erro de conexão.', 'error');

@@ -127,6 +127,7 @@ class FinanceTransaction(Base):
     month_year = Column(String(7), nullable=False, index=True) # Formato: YYYY-MM
     title = Column(String(255), nullable=False, index=True)
     amount = Column(Float, nullable=False)
+    transaction_type = Column(String(20), default="expense", index=True) # "expense" (Saída) ou "income" (Entrada)
     category = Column(String(100), default="Outros", index=True)
     original_category = Column(String(100), nullable=True)
     payment_method = Column(String(100), default="Cartão Nubank")
