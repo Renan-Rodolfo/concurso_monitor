@@ -12,14 +12,17 @@ from pydantic import BaseModel
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from datetime import datetime
 import httpx
 from app import job_search as js
 from app import finance
+from app import taxonomy
+from app import deduplication
 
 from app.database import Base, engine, get_db, SessionLocal
 from app import models
 from app.scraper import run_scraper_job
-from app.telegram import send_telegram_message, get_telegram_config
+from app.telegram import send_telegram_message, get_telegram_config, notify_new_jobs
 
 
 # Configuração de logs
@@ -36,19 +39,113 @@ async def scheduled_scraper():
     finally:
         db.close()
 
+async def scheduled_job_search():
+    """Varredura periódica de vagas multi-plataforma e alerta de novas oportunidades no Telegram."""
+    db = SessionLocal()
+    try:
+        logger.info("Executando busca agendada automática de vagas...")
+        profile = db.query(models.CandidateProfile).first()
+        primary_role = "Analista de Suporte"
+        cand_skills = []
+        target_roles = []
+        if profile:
+            if profile.target_roles:
+                primary_role = profile.target_roles.split(",")[0].strip()
+                target_roles = [r.strip() for r in profile.target_roles.split(",") if r.strip()]
+            if profile.primary_skills:
+                cand_skills = [s.strip() for s in profile.primary_skills.split(",") if s.strip()]
+
+        terms = taxonomy.expand_search_terms(primary_role)
+        results = await js.run_multi_platform_search(terms, location="Brasil", max_per_platform=10)
+
+        existing_jobs = db.query(models.JobOpportunity).all()
+        new_jobs = []
+
+        for raw in results:
+            is_dup, matched_job = deduplication.is_duplicate(raw, existing_jobs)
+            if is_dup and matched_job:
+                matched_job.other_sources = deduplication.merge_job_sources(
+                    matched_job.other_sources, raw.get("source", "Outra"), raw.get("link", "")
+                )
+                if not matched_job.salary and raw.get("salary"):
+                    matched_job.salary = raw.get("salary")
+                if matched_job.pcd_type == "Ampla" and raw.get("pcd_type") != "Ampla":
+                    matched_job.pcd_type = raw.get("pcd_type")
+            elif not is_dup:
+                fit = js.compute_fit_score(raw, cand_skills, target_roles)
+                new_job = models.JobOpportunity(
+                    title=raw["title"],
+                    company=raw["company"],
+                    location=raw.get("location") or "Brasil",
+                    work_model=raw.get("work_model") or "Remoto",
+                    salary=raw.get("salary"),
+                    link=raw.get("link"),
+                    description=raw.get("description"),
+                    skills_required=raw.get("skills_required"),
+                    fit_score=fit,
+                    status="Nova",
+                    is_viewed=False,
+                    user_interest="Pendente",
+                    is_open=raw.get("is_open", True),
+                    application_deadline=raw.get("application_deadline"),
+                    pcd_type=raw.get("pcd_type", "Ampla"),
+                    primary_source=raw.get("source", "Gupy"),
+                    other_sources=raw.get("other_sources"),
+                    dedup_hash=raw.get("dedup_hash")
+                )
+                db.add(new_job)
+                db.commit()
+                db.refresh(new_job)
+                existing_jobs.append(new_job)
+                new_jobs.append(new_job)
+
+        db.commit()
+        if new_jobs:
+            logger.info(f"{len(new_jobs)} novas vagas inseridas na busca agendada. Notificando Telegram...")
+            await notify_new_jobs(new_jobs[:8], db)
+    except Exception as e:
+        logger.error(f"Erro no agendador de vagas: {e}")
+    finally:
+        db.close()
+
+
 def check_and_migrate_db():
     """Migração leve para SQLite garantindo colunas adicionadas recentemente."""
     from sqlalchemy import text
     try:
         with engine.connect() as conn:
-            result = conn.execute(text("PRAGMA table_info(finance_transactions)"))
-            columns = [row[1] for row in result.fetchall()]
-            if columns and "transaction_type" not in columns:
+            # Migração finance_transactions
+            res_fin = conn.execute(text("PRAGMA table_info(finance_transactions)"))
+            columns_fin = [row[1] for row in res_fin.fetchall()]
+            if columns_fin and "transaction_type" not in columns_fin:
                 conn.execute(text("ALTER TABLE finance_transactions ADD COLUMN transaction_type VARCHAR(20) DEFAULT 'expense'"))
                 conn.commit()
-                logger.info("Migração de banco executada: coluna 'transaction_type' adicionada em finance_transactions.")
+                logger.info("Migração: coluna 'transaction_type' adicionada em finance_transactions.")
+
+            # Migração job_opportunities
+            res_jobs = conn.execute(text("PRAGMA table_info(job_opportunities)"))
+            columns_jobs = [row[1] for row in res_jobs.fetchall()]
+            if columns_jobs:
+                needed_cols = [
+                    ("is_viewed", "BOOLEAN DEFAULT 0"),
+                    ("viewed_at", "DATETIME"),
+                    ("user_interest", "VARCHAR(50) DEFAULT 'Pendente'"),
+                    ("is_open", "BOOLEAN DEFAULT 1"),
+                    ("application_deadline", "VARCHAR(100)"),
+                    ("pcd_type", "VARCHAR(30) DEFAULT 'Ampla'"),
+                    ("primary_source", "VARCHAR(50) DEFAULT 'Gupy'"),
+                    ("other_sources", "TEXT"),
+                    ("dedup_hash", "VARCHAR(64)"),
+                    ("last_checked_at", "DATETIME")
+                ]
+                for col_name, col_def in needed_cols:
+                    if col_name not in columns_jobs:
+                        conn.execute(text(f"ALTER TABLE job_opportunities ADD COLUMN {col_name} {col_def}"))
+                        conn.commit()
+                        logger.info(f"Migração: coluna '{col_name}' adicionada em job_opportunities.")
     except Exception as ex:
         logger.warning(f"Aviso na verificação de migração do banco: {ex}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -56,7 +153,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     check_and_migrate_db()
 
-    # Configurar agendamento diário (padrão 07:00 AM)
+    # Configurar agendamento diário de concursos (padrão 07:00 AM)
     hour = int(os.getenv("SCRAPER_CRON_HOUR", "7"))
     minute = int(os.getenv("SCRAPER_CRON_MINUTE", "0"))
     scheduler.add_job(
@@ -65,8 +162,20 @@ async def lifespan(app: FastAPI):
         id="daily_concurso_scraper",
         replace_existing=True
     )
+
+    # Configurar agendamento diário de vagas (padrão 08:30 AM)
+    job_hour = int(os.getenv("JOB_SEARCH_CRON_HOUR", "8"))
+    job_minute = int(os.getenv("JOB_SEARCH_CRON_MINUTE", "30"))
+    scheduler.add_job(
+        scheduled_job_search,
+        trigger=CronTrigger(hour=job_hour, minute=job_minute),
+        id="daily_job_search",
+        replace_existing=True
+    )
+
     scheduler.start()
-    logger.info(f"APScheduler iniciado com job diário agendado para {hour:02d}:{minute:02d}.")
+    logger.info(f"APScheduler iniciado: concursos às {hour:02d}:{minute:02d}, vagas às {job_hour:02d}:{job_minute:02d}.")
+
 
     yield
 
@@ -133,11 +242,30 @@ class JobOpportunityCreate(BaseModel):
     link: Optional[str] = None
     description: Optional[str] = None
     skills_required: Optional[str] = None
+    pcd_type: Optional[str] = "Ampla"
+    is_open: Optional[bool] = True
     notes: Optional[str] = None
 
 class JobOpportunityUpdateStatus(BaseModel):
     status: str
     notes: Optional[str] = None
+
+class JobViewedUpdate(BaseModel):
+    is_viewed: bool
+
+class JobInterestUpdate(BaseModel):
+    interest: str
+
+class JobRunSearchParams(BaseModel):
+    primary_term: str = "Analista de Suporte"
+    selected_adjacents: Optional[List[str]] = None
+    platforms: Optional[List[str]] = None
+    location: Optional[str] = "Brasil"
+    work_model: Optional[str] = None
+    jobage: Optional[int] = None
+    notify_telegram: Optional[bool] = False
+    auto_save: Optional[bool] = True
+
 
 class TransactionCreate(BaseModel):
     date: str
@@ -489,10 +617,52 @@ def delete_job_query(query_id: int, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 @app.get("/api/job-search/jobs")
-def get_job_opportunities(status: Optional[str] = None, db: Session = Depends(get_db)):
+def get_job_opportunities(
+    status: Optional[str] = None,
+    viewed: Optional[bool] = None,
+    interest: Optional[str] = None,
+    pcd: Optional[str] = None,
+    is_open: Optional[bool] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Retorna as vagas da base de dados com suporte a filtros completos:
+    - status da candidatura
+    - visualizada (já vi ou não)
+    - interesse pessoal (Pendente, Interesse, Sem Interesse, Aplicado)
+    - política PCD (Ampla, Afirmativa PCD, Exclusiva PCD, PCD Geral)
+    - status da vaga (Em Aberto ou Encerrada)
+    - busca por termo
+    """
     query = db.query(models.JobOpportunity)
+
     if status and status != "Todas":
         query = query.filter(models.JobOpportunity.status == status)
+
+    if viewed is not None:
+        query = query.filter(models.JobOpportunity.is_viewed == viewed)
+
+    if interest and interest != "Todas":
+        query = query.filter(models.JobOpportunity.user_interest == interest)
+
+    if pcd and pcd != "Todas":
+        if pcd == "PCD Geral":
+            query = query.filter(models.JobOpportunity.pcd_type.in_(["Afirmativa PCD", "Exclusiva PCD"]))
+        else:
+            query = query.filter(models.JobOpportunity.pcd_type == pcd)
+
+    if is_open is not None:
+        query = query.filter(models.JobOpportunity.is_open == is_open)
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            (models.JobOpportunity.title.ilike(term)) |
+            (models.JobOpportunity.company.ilike(term)) |
+            (models.JobOpportunity.location.ilike(term))
+        )
+
     return query.order_by(models.JobOpportunity.created_at.desc()).all()
 
 @app.post("/api/job-search/jobs")
@@ -505,6 +675,10 @@ def create_job_opportunity(job_data: JobOpportunityCreate, db: Session = Depends
     profile = db.query(models.CandidateProfile).first()
     fit_score = calculate_job_fit_score(job_data.skills_required or job_data.description or "", profile)
 
+    detected_pcd = js.detect_pcd_type(clean_title, job_data.description or "")
+    final_pcd = job_data.pcd_type if (job_data.pcd_type and job_data.pcd_type != "Ampla") else detected_pcd
+    dedup_hash = deduplication.generate_dedup_hash(clean_company, clean_title, job_data.location or "")
+
     new_job = models.JobOpportunity(
         title=clean_title,
         company=clean_company,
@@ -516,12 +690,83 @@ def create_job_opportunity(job_data: JobOpportunityCreate, db: Session = Depends
         skills_required=job_data.skills_required.strip() if job_data.skills_required else None,
         fit_score=fit_score,
         status="Nova",
+        is_viewed=False,
+        user_interest="Pendente",
+        is_open=True if job_data.is_open is None else job_data.is_open,
+        pcd_type=final_pcd,
+        primary_source="Manual",
+        dedup_hash=dedup_hash,
         notes=job_data.notes.strip() if job_data.notes else None
     )
     db.add(new_job)
     db.commit()
     db.refresh(new_job)
     return new_job
+
+@app.put("/api/job-search/jobs/{job_id}/viewed")
+def update_job_viewed(job_id: int, data: JobViewedUpdate, db: Session = Depends(get_db)):
+    """Atualiza o status de 'já visto' ou 'não visto' da vaga."""
+    job = db.query(models.JobOpportunity).filter(models.JobOpportunity.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Vaga não encontrada")
+    job.is_viewed = data.is_viewed
+    job.viewed_at = datetime.utcnow() if data.is_viewed else None
+    db.commit()
+    db.refresh(job)
+    return {"status": "success", "id": job.id, "is_viewed": job.is_viewed}
+
+@app.put("/api/job-search/jobs/{job_id}/interest")
+def update_job_interest(job_id: int, data: JobInterestUpdate, db: Session = Depends(get_db)):
+    """Atualiza o nível de interesse pessoal na vaga (Pendente, Interesse, Sem Interesse, Aplicado)."""
+    job = db.query(models.JobOpportunity).filter(models.JobOpportunity.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Vaga não encontrada")
+    job.user_interest = data.interest
+    # Se marcou interesse ou aplicou, marca automaticamente como vista
+    if data.interest in ("Interesse", "Aplicado", "Sem Interesse"):
+        job.is_viewed = True
+        if not job.viewed_at:
+            job.viewed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(job)
+    return {"status": "success", "id": job.id, "user_interest": job.user_interest, "is_viewed": job.is_viewed}
+
+@app.post("/api/job-search/jobs/mark-all-viewed")
+def mark_all_jobs_viewed(db: Session = Depends(get_db)):
+    """Marca todas as vagas da base como visualizadas."""
+    now = datetime.utcnow()
+    db.query(models.JobOpportunity).filter(models.JobOpportunity.is_viewed == False).update({
+        models.JobOpportunity.is_viewed: True,
+        models.JobOpportunity.viewed_at: now
+    })
+    db.commit()
+    return {"status": "success", "message": "Todas as vagas foram marcadas como visualizadas."}
+
+@app.post("/api/job-search/jobs/{job_id}/check-status")
+async def check_single_job_status(job_id: int, db: Session = Depends(get_db)):
+    """Checa se o link da vaga ainda está ativo e se a inscrição continua em aberto."""
+    job = db.query(models.JobOpportunity).filter(models.JobOpportunity.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Vaga não encontrada")
+
+    if not job.link:
+        return {"status": "ok", "is_open": job.is_open, "message": "Sem link para checagem"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(job.link, headers=js.BROWSER_HEADERS)
+            if resp.status_code in (404, 410):
+                job.is_open = False
+            else:
+                is_open, _ = js.detect_open_status(job.application_deadline, resp.text)
+                job.is_open = is_open
+            job.last_checked_at = datetime.utcnow()
+            db.commit()
+            db.refresh(job)
+            return {"status": "success", "id": job.id, "is_open": job.is_open}
+    except Exception as e:
+        logger.warning(f"Erro ao verificar link da vaga {job_id}: {e}")
+        return {"status": "error", "id": job.id, "is_open": job.is_open, "message": str(e)}
 
 @app.put("/api/job-search/jobs/{job_id}/status")
 def update_job_status(job_id: int, data: JobOpportunityUpdateStatus, db: Session = Depends(get_db)):
@@ -545,142 +790,137 @@ def delete_job_opportunity(job_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success"}
 
-# --- ROTA: SALVAR VAGA DO RESULTADO DE BUSCA NO BOARD ---
+# --- ROTAS: TAXONOMIA E TERMOS ADJACENTES ---
 
-@app.post("/api/job-search/jobs/save-from-search")
-def save_job_from_search(job_data: JobOpportunityCreate, db: Session = Depends(get_db)):
-    """Salva uma vaga encontrada na busca ao vivo diretamente no Board de Candidaturas."""
-    # Verificar se a vaga já foi salva (pelo link)
-    if job_data.link:
-        existing = db.query(models.JobOpportunity).filter(
-            models.JobOpportunity.link == job_data.link.strip()
-        ).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Vaga já salva no Board de Candidaturas")
+@app.get("/api/job-search/taxonomy")
+def get_job_taxonomy():
+    """Retorna as categorias estruturadas e termos para sugestões rápidas."""
+    return {
+        "categories": taxonomy.get_taxonomy_overview(),
+        "available_platforms": [
+            {"key": k, "name": v[0]} for k, v in js.AVAILABLE_PLATFORMS.items()
+        ]
+    }
 
-    profile = db.query(models.CandidateProfile).first()
-    fit_score = calculate_job_fit_score(job_data.skills_required or job_data.description or "", profile)
+@app.get("/api/job-search/adjacent-terms")
+def get_adjacent_terms(term: str = "Analista de Suporte"):
+    """Retorna os termos de busca adjacentes/referências para um termo principal."""
+    adjacents = taxonomy.find_adjacent_terms(term)
+    return {"primary_term": term, "adjacent_terms": adjacents}
 
-    new_job = models.JobOpportunity(
-        title=job_data.title.strip(),
-        company=job_data.company.strip(),
-        location=job_data.location.strip() if job_data.location else "Remoto",
-        work_model=job_data.work_model.strip() if job_data.work_model else "Remoto",
-        salary=job_data.salary.strip() if job_data.salary else None,
-        link=job_data.link.strip() if job_data.link else None,
-        description=job_data.description.strip() if job_data.description else None,
-        skills_required=job_data.skills_required.strip() if job_data.skills_required else None,
-        fit_score=fit_score,
-        status="Nova",
-        notes=job_data.notes.strip() if job_data.notes else None
-    )
-    db.add(new_job)
-    db.commit()
-    db.refresh(new_job)
-    return new_job
+# --- ROTA: MOTOR DE BUSCA MULTI-PLATAFORMA E DEDUPLICAÇÃO ---
 
-# --- ROTA: BUSCA INTELIGENTE DE VAGAS (Multi-fonte: LinkedIn + Gupy + freehire.dev) ---
-
-class SmartSearchParams(BaseModel):
-    prompt: Optional[str] = None       # Texto livre do usuário
-    work_mode: Optional[str] = None    # "remote", "hybrid", "onsite" — None = qualquer
-    jobage: Optional[int] = None       # Vagas dos últimos N dias — None = todas
-    location: Optional[str] = "Brasil" # Localização para LinkedIn
-
-@app.get("/api/job-search/smart-terms")
-def get_smart_terms(db: Session = Depends(get_db)):
-    """Retorna os termos de busca derivados automaticamente do perfil cadastrado."""
-    profile = db.query(models.CandidateProfile).first()
-    if not profile:
-        return {"terms": [], "message": "Perfil não encontrado. Cadastre seu perfil primeiro."}
-    terms = js.derive_search_terms(
-        headline=profile.headline or "",
-        primary_skills=profile.primary_skills or "",
-        secondary_skills=profile.secondary_skills or "",
-        target_roles=profile.target_roles or "",
-        experience_summary=profile.experience_summary or "",
-    )
-    return {"terms": terms}
-
-@app.post("/api/job-search/smart-search")
-async def smart_search_jobs(params: SmartSearchParams = None, db: Session = Depends(get_db)):
+@app.post("/api/job-search/run-search")
+async def run_job_search(params: JobRunSearchParams, db: Session = Depends(get_db)):
     """
-    Busca inteligente multi-fonte: LinkedIn + Gupy + freehire.dev
-    Deriva os termos de busca automaticamente do perfil cadastrado.
-    Aceita prompt em linguagem natural para refinar a busca.
+    Executa varredura nas 10 plataformas de recrutamento.
+    Aplica expansão semântica de termos, deduplicação cross-plataforma e salva na base de dados.
     """
-    if params is None:
-        params = SmartSearchParams()
+    primary = params.primary_term.strip() or "Analista de Suporte"
+    selected_adjacents = params.selected_adjacents or []
+    
+    # Expandir termos
+    queries = taxonomy.expand_search_terms(primary, selected_adjacents, max_total=4)
+    logger.info(f"Busca multi-plataforma iniciada para: {queries} nas plataformas: {params.platforms}")
 
-    profile = db.query(models.CandidateProfile).first()
-
-    # Derivar termos de busca do perfil + prompt
-    terms = js.derive_search_terms(
-        headline=profile.headline or "" if profile else "",
-        primary_skills=profile.primary_skills or "" if profile else "",
-        secondary_skills=profile.secondary_skills or "" if profile else "",
-        target_roles=profile.target_roles or "" if profile else "",
-        experience_summary=profile.experience_summary or "" if profile else "",
-        prompt=params.prompt or "",
+    # Executar busca nas plataformas selecionadas
+    raw_results = await js.run_multi_platform_search(
+        queries=queries,
+        selected_platform_keys=params.platforms,
+        location=params.location or "Brasil",
+        work_mode=params.work_mode,
+        jobage=params.jobage,
+        max_per_platform=12
     )
 
-    if not terms:
-        raise HTTPException(
-            status_code=400,
-            detail="Não foi possível derivar termos de busca. Preencha seu perfil (Headline, Habilidades ou Cargos Desejados) ou digite um prompt."
-        )
+    profile = db.query(models.CandidateProfile).first()
+    cand_skills = [s.strip() for s in profile.primary_skills.split(",") if s.strip()] if (profile and profile.primary_skills) else []
+    target_roles = [r.strip() for r in profile.target_roles.split(",") if r.strip()] if (profile and profile.target_roles) else [primary]
 
-    logger.info(f"Smart search — termos derivados: {terms}")
+    existing_jobs = db.query(models.JobOpportunity).all()
+    newly_added: List[models.JobOpportunity] = []
+    merged_count = 0
 
-    # Habilidades e cargos-alvo do candidato para cálculo do Fit Score
-    cand_skills: list[str] = []
-    target_roles: list[str] = []
-    if profile:
-        if profile.primary_skills:
-            cand_skills += [s.strip() for s in profile.primary_skills.split(",") if s.strip()]
-        if profile.secondary_skills:
-            cand_skills += [s.strip() for s in profile.secondary_skills.split(",") if s.strip()]
-        if profile.target_roles:
-            target_roles = [r.strip() for r in profile.target_roles.split(",") if r.strip()]
+    if params.auto_save:
+        for raw in raw_results:
+            is_dup, matched_job = deduplication.is_duplicate(raw, existing_jobs)
+            if is_dup and matched_job:
+                # Atualiza fontes alternativas
+                matched_job.other_sources = deduplication.merge_job_sources(
+                    matched_job.other_sources, raw.get("source", "Outra"), raw.get("link", "")
+                )
+                if not matched_job.salary and raw.get("salary"):
+                    matched_job.salary = raw.get("salary")
+                if matched_job.pcd_type == "Ampla" and raw.get("pcd_type") != "Ampla":
+                    matched_job.pcd_type = raw.get("pcd_type")
+                if not matched_job.application_deadline and raw.get("application_deadline"):
+                    matched_job.application_deadline = raw.get("application_deadline")
+                merged_count += 1
+            elif not is_dup:
+                fit = js.compute_fit_score(raw, cand_skills, target_roles)
+                new_job = models.JobOpportunity(
+                    title=raw["title"],
+                    company=raw["company"],
+                    location=raw.get("location") or "Brasil",
+                    work_model=raw.get("work_model") or "Remoto",
+                    salary=raw.get("salary"),
+                    link=raw.get("link"),
+                    description=raw.get("description"),
+                    skills_required=raw.get("skills_required"),
+                    fit_score=fit,
+                    status="Nova",
+                    is_viewed=False,
+                    user_interest="Pendente",
+                    is_open=raw.get("is_open", True),
+                    application_deadline=raw.get("application_deadline"),
+                    pcd_type=raw.get("pcd_type", "Ampla"),
+                    primary_source=raw.get("source", "Gupy"),
+                    other_sources=raw.get("other_sources"),
+                    dedup_hash=raw.get("dedup_hash")
+                )
+                db.add(new_job)
+                db.commit()
+                db.refresh(new_job)
+                existing_jobs.append(new_job)
+                newly_added.append(new_job)
 
-    all_results: list[dict] = []
-    seen_ids: set[str] = set()
-    location = params.location or "Brasil"
+        db.commit()
 
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-        # Executar buscas em paralelo para cada termo
-        for term in terms[:4]:  # Máx 4 termos por rodada
-            tasks = [
-                js.search_linkedin_br(client, term, location=location,
-                                      work_mode=params.work_mode, jobage=params.jobage),
-                js.search_gupy_br(client, term),
-                js.search_freehire_br(client, term, work_mode=params.work_mode, jobage=params.jobage),
-            ]
-            batch = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for result_list in batch:
-                if isinstance(result_list, Exception):
-                    logger.error(f"Erro em batch de busca: {result_list}")
-                    continue
-                for job in (result_list or []):
-                    job_id = job.get("id", "")
-                    if not job_id or job_id in seen_ids:
-                        continue
-                    seen_ids.add(job_id)
-                    # Calcular Fit Score
-                    job["fit_score"] = js.compute_fit_score(job, cand_skills, target_roles)
-                    all_results.append(job)
-
-    # Ordenar por fit_score decrescente, depois por fonte (LinkedIn primeiro)
-    source_order = {"LinkedIn": 0, "Gupy": 1, "freehire.dev": 2}
-    all_results.sort(key=lambda x: (-x["fit_score"], source_order.get(x.get("source", ""), 9)))
+        # Notificar via Telegram se requisitado e houver vagas inéditas
+        if params.notify_telegram and newly_added:
+            await notify_new_jobs(newly_added[:8], db)
 
     return {
         "status": "success",
-        "terms_used": terms,
-        "total": len(all_results),
-        "results": all_results
+        "primary_term": primary,
+        "terms_used": queries,
+        "total_found": len(raw_results),
+        "newly_added_count": len(newly_added),
+        "merged_duplicates_count": merged_count,
+        "results": raw_results
     }
+
+# Compatibilidade retroativa com endpoint smart-search
+class SmartSearchParams(BaseModel):
+    prompt: Optional[str] = None
+    location: Optional[str] = "Brasil"
+    work_mode: Optional[str] = None
+    jobage: Optional[int] = None
+
+@app.post("/api/job-search/smart-search")
+async def smart_search_jobs_compat(params: Optional[SmartSearchParams] = None, db: Session = Depends(get_db)):
+    """Compatibilidade com o botão da interface antiga."""
+    prompt = params.prompt if params else None
+    run_params = JobRunSearchParams(
+        primary_term=prompt or "Analista de Suporte",
+        location=params.location if params else "Brasil",
+        work_mode=params.work_mode if params else None,
+        jobage=params.jobage if params else None,
+        auto_save=True
+    )
+    return await run_job_search(run_params, db=db)
+
+
 
 # --- ROTAS DA API: STATS DASHBOARD ---
 
@@ -700,6 +940,10 @@ def get_stats(db: Session = Depends(get_db)):
 
     jobs_count = db.query(models.JobOpportunity).count()
     applied_count = db.query(models.JobOpportunity).filter(models.JobOpportunity.status == "Aplicado").count()
+    jobs_unviewed_count = db.query(models.JobOpportunity).filter(models.JobOpportunity.is_viewed == False).count()
+    jobs_interest_count = db.query(models.JobOpportunity).filter(models.JobOpportunity.user_interest == "Interesse").count()
+    jobs_pcd_count = db.query(models.JobOpportunity).filter(models.JobOpportunity.pcd_type.in_(["Afirmativa PCD", "Exclusiva PCD"])).count()
+    jobs_open_count = db.query(models.JobOpportunity).filter(models.JobOpportunity.is_open == True).count()
 
     finances_count = db.query(models.FinanceTransaction).count()
     finances_total_spent = sum([t.amount for t in db.query(models.FinanceTransaction.amount).all()])
@@ -713,9 +957,14 @@ def get_stats(db: Session = Depends(get_db)):
         "avg_accuracy": avg_accuracy,
         "jobs_count": jobs_count,
         "applied_count": applied_count,
+        "jobs_unviewed_count": jobs_unviewed_count,
+        "jobs_interest_count": jobs_interest_count,
+        "jobs_pcd_count": jobs_pcd_count,
+        "jobs_open_count": jobs_open_count,
         "finances_count": finances_count,
         "finances_total_spent": round(finances_total_spent, 2)
     }
+
 
 # --- ROTAS DA API: ANÁLISE FINANCEIRA (NUBANK & GASTOS) ---
 

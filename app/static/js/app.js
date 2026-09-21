@@ -11,6 +11,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadConcursos();
     loadTelegramSettings();
     loadPositions();
+    loadAdjacentTerms();
 });
 
 // Toast notification helper
@@ -56,9 +57,9 @@ function switchTab(tabName) {
         loadTelegramSettings();
     } else if (tabName === 'jobsearch') {
         loadCandidateProfile();
-        loadJobQueries();
         loadJobOpportunities();
-        loadSmartTerms();
+        loadAdjacentTerms();
+        loadStats();
     } else if (tabName === 'finances') {
         loadFinanceData();
     }
@@ -70,10 +71,33 @@ async function loadStats() {
         const res = await fetch('/api/stats');
         if (res.ok) {
             const data = await res.json();
-            document.getElementById('stat-cities').innerText = data.cities_count;
-            document.getElementById('stat-concursos').innerText = data.concursos_count;
-            document.getElementById('stat-theory').innerText = `${data.avg_theory}%`;
-            document.getElementById('stat-accuracy').innerText = `${data.avg_accuracy}%`;
+            if (document.getElementById('stat-cities')) document.getElementById('stat-cities').innerText = data.cities_count ?? 0;
+            if (document.getElementById('stat-concursos')) document.getElementById('stat-concursos').innerText = data.concursos_count ?? 0;
+            if (document.getElementById('stat-theory')) document.getElementById('stat-theory').innerText = `${data.avg_theory ?? 0}%`;
+            if (document.getElementById('stat-accuracy')) document.getElementById('stat-accuracy').innerText = `${data.avg_accuracy ?? 0}%`;
+
+            // Métricas da central de vagas
+            if (document.getElementById('metric-jobs-total')) {
+                document.getElementById('metric-jobs-total').innerText = data.jobs_count ?? 0;
+            }
+            if (document.getElementById('metric-jobs-unviewed')) {
+                const unviewed = data.jobs_unviewed_count ?? 0;
+                document.getElementById('metric-jobs-unviewed').innerText = unviewed;
+                const pulse = document.getElementById('badge-unviewed-pulse');
+                if (pulse) {
+                    if (unviewed > 0) pulse.classList.remove('hidden');
+                    else pulse.classList.add('hidden');
+                }
+            }
+            if (document.getElementById('metric-jobs-interest')) {
+                document.getElementById('metric-jobs-interest').innerText = data.jobs_interest_count ?? 0;
+            }
+            if (document.getElementById('metric-jobs-pcd')) {
+                document.getElementById('metric-jobs-pcd').innerText = data.jobs_pcd_count ?? 0;
+            }
+            if (document.getElementById('metric-jobs-open')) {
+                document.getElementById('metric-jobs-open').innerText = data.jobs_open_count ?? 0;
+            }
         }
     } catch (e) {
         console.error("Erro ao carregar estatísticas", e);
@@ -760,26 +784,286 @@ async function handleDeleteJobQuery(queryId) {
     }
 }
 
-async function loadJobOpportunities() {
-    const statusSelect = document.getElementById('filter-job-status');
-    const status = statusSelect ? statusSelect.value : 'Todas';
+// ============================================================
+// CENTRAL DE OPORTUNIDADES & BUSCA MULTI-PLATAFORMA
+// ============================================================
+
+let allJobs = [];
+let currentJobFilter = 'all'; // 'all', 'unviewed', 'interest', 'pcd', 'open', 'applied'
+let jobQuickSearchQuery = '';
+let selectedAdjacentTerms = new Set();
+let adjacentDebounceTimer = null;
+let jobSearchInterval = null;
+
+const JOB_PLATFORM_CONFIG = {
+    'Gupy': { color: 'bg-orange-500/10 text-orange-400 border-orange-500/30 hover:bg-orange-500/20', icon: 'fa-solid fa-g' },
+    'LinkedIn': { color: 'bg-blue-500/10 text-blue-400 border-blue-500/30 hover:bg-blue-500/20', icon: 'fa-brands fa-linkedin' },
+    'InfoJobs': { color: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30 hover:bg-indigo-500/20', icon: 'fa-solid fa-briefcase' },
+    'Catho': { color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30 hover:bg-cyan-500/20', icon: 'fa-solid fa-file-lines' },
+    'Vagas.com': { color: 'bg-rose-500/10 text-rose-400 border-rose-500/30 hover:bg-rose-500/20', icon: 'fa-solid fa-v' },
+    'freehire.dev': { color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20', icon: 'fa-solid fa-globe' },
+    'BNE': { color: 'bg-teal-500/10 text-teal-400 border-teal-500/30 hover:bg-teal-500/20', icon: 'fa-solid fa-address-card' },
+    'Empregos.com': { color: 'bg-purple-500/10 text-purple-400 border-purple-500/30 hover:bg-purple-500/20', icon: 'fa-solid fa-building-user' },
+    'Trampos.co': { color: 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20', icon: 'fa-solid fa-laptop-code' },
+    'Agregador': { color: 'bg-slate-500/10 text-slate-300 border-slate-600 hover:bg-slate-700/50', icon: 'fa-solid fa-network-wired' },
+    'Manual': { color: 'bg-slate-500/10 text-slate-300 border-slate-600 hover:bg-slate-700/50', icon: 'fa-solid fa-pen' },
+};
+
+// --- GESTÃO DE TERMOS ADJACENTES ---
+
+async function loadAdjacentTerms(primaryTerm) {
+    const term = primaryTerm || (document.getElementById('search-primary-term')?.value.trim()) || 'Analista de Suporte';
+    const container = document.getElementById('adjacent-terms-chips');
+    if (!container) return;
+
     try {
-        const res = await fetch(`/api/job-search/jobs?status=${encodeURIComponent(status)}`);
+        const res = await fetch(`/api/job-search/adjacent-terms?term=${encodeURIComponent(term)}`);
         if (res.ok) {
-            allJobs = await res.json();
-            renderJobsTable(allJobs);
+            const data = await res.json();
+            const terms = data.adjacent_terms || [];
+            renderAdjacentChips(terms);
         }
     } catch (e) {
-        console.error("Erro ao carregar oportunidades de vagas", e);
+        console.error('Erro ao carregar termos adjacentes:', e);
+    }
+}
+
+function renderAdjacentChips(terms) {
+    const container = document.getElementById('adjacent-terms-chips');
+    if (!container) return;
+
+    if (!terms || terms.length === 0) {
+        container.innerHTML = '<span class="text-xs text-slate-500 italic">Nenhum termo adjacente sugerido para este cargo.</span>';
+        return;
+    }
+
+    container.innerHTML = terms.map(t => {
+        const isSelected = selectedAdjacentTerms.has(t);
+        const activeClass = isSelected
+            ? 'bg-purple-600/90 text-white border-purple-400 font-semibold shadow-sm'
+            : 'bg-slate-900/80 hover:bg-slate-800 text-slate-300 border-slate-700 hover:text-white';
+        const icon = isSelected ? 'fa-check' : 'fa-plus';
+
+        return `
+            <button type="button" onclick="toggleAdjacentChip('${t.replace(/'/g, "\\'")}')"
+                    class="px-2.5 py-1 rounded-lg text-xs border transition-all flex items-center gap-1.5 ${activeClass}">
+                <i class="fa-solid ${icon} text-[10px] ${isSelected ? 'text-purple-200' : 'text-slate-400'}"></i>
+                <span>${t}</span>
+            </button>
+        `;
+    }).join('');
+}
+
+function toggleAdjacentChip(term) {
+    if (selectedAdjacentTerms.has(term)) {
+        selectedAdjacentTerms.delete(term);
+    } else {
+        if (selectedAdjacentTerms.size >= 3) {
+            showToast('Máximo de 3 termos adjacentes selecionados.', 'info');
+            return;
+        }
+        selectedAdjacentTerms.add(term);
+    }
+    const currentPrimary = document.getElementById('search-primary-term')?.value.trim() || 'Analista de Suporte';
+    loadAdjacentTerms(currentPrimary);
+}
+
+function handlePrimaryTermChange(event) {
+    clearTimeout(adjacentDebounceTimer);
+    if (event.key === 'Enter') {
+        refreshAdjacentTerms();
+        return;
+    }
+    adjacentDebounceTimer = setTimeout(() => {
+        refreshAdjacentTerms();
+    }, 600);
+}
+
+function refreshAdjacentTerms() {
+    selectedAdjacentTerms.clear();
+    const term = document.getElementById('search-primary-term')?.value.trim() || 'Analista de Suporte';
+    loadAdjacentTerms(term);
+}
+
+// --- MOTOR DE BUSCA MULTI-PLATAFORMA ---
+
+async function triggerRunJobSearch() {
+    const btn = document.getElementById('btn-run-search');
+    const loader = document.getElementById('job-search-loader');
+    const loaderStatus = document.getElementById('job-search-loader-status');
+    const feedback = document.getElementById('job-search-feedback');
+
+    const primaryTerm = (document.getElementById('search-primary-term')?.value.trim()) || 'Analista de Suporte';
+    const location = (document.getElementById('search-location')?.value.trim()) || 'Brasil';
+    const workMode = document.getElementById('search-workmode')?.value || null;
+    const notifyTelegram = document.getElementById('search-notify-telegram')?.checked ?? true;
+
+    const payload = {
+        primary_term: primaryTerm,
+        selected_adjacents: Array.from(selectedAdjacentTerms),
+        location: location,
+        work_mode: workMode,
+        notify_telegram: notifyTelegram,
+        auto_save: true,
+        platforms: []
+    };
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Buscando...';
+    loader.classList.remove('hidden');
+    feedback.classList.add('hidden');
+
+    const statusMessages = [
+        'Consultando Gupy (vagas brasileiras, prazos e PCD)...',
+        'Buscando no LinkedIn Guest API...',
+        'Consultando InfoJobs e Catho...',
+        'Consultando Vagas.com.br e freehire.dev...',
+        'Consultando BNE, Empregos.com e Trampos.co...',
+        'Deduplicando vagas cross-plataforma e consolidando fontes...'
+    ];
+    let msgIndex = 0;
+    jobSearchInterval = setInterval(() => {
+        msgIndex = (msgIndex + 1) % statusMessages.length;
+        if (loaderStatus) loaderStatus.textContent = statusMessages[msgIndex];
+    }, 2200);
+
+    try {
+        const res = await fetch('/api/job-search/run-search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        clearInterval(jobSearchInterval);
+        loader.classList.add('hidden');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-arrow-right mr-2"></i> Buscar Vagas Agora';
+
+        const data = await res.json();
+        if (res.ok) {
+            feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-emerald-950/60 border border-emerald-500/40 text-emerald-300';
+            feedback.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-circle-check text-emerald-400 text-sm"></i>
+                    <span>Varredura concluída! <strong>${data.total_found || 0} vagas</strong> encontradas nas 10 plataformas (<strong>${data.newly_added_count || 0} novas</strong> na base, <strong>${data.merged_duplicates_count || 0} duplicatas</strong> consolidadas).</span>
+                </div>
+                <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-emerald-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+            `;
+            feedback.classList.remove('hidden');
+            showToast(`Busca concluída: ${data.newly_added_count} vagas novas adicionadas!`);
+            loadJobOpportunities();
+            loadStats();
+        } else {
+            feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-rose-950/60 border border-rose-500/40 text-rose-300';
+            feedback.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-circle-exclamation text-rose-400 text-sm"></i>
+                    <span>Erro na busca: ${data.detail || 'Falha ao executar varredura.'}</span>
+                </div>
+                <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-rose-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+            `;
+            feedback.classList.remove('hidden');
+        }
+    } catch (e) {
+        clearInterval(jobSearchInterval);
+        loader.classList.add('hidden');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-arrow-right mr-2"></i> Buscar Vagas Agora';
+        feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-rose-950/60 border border-rose-500/40 text-rose-300';
+        feedback.innerHTML = `
+            <div class="flex items-center gap-2">
+                <i class="fa-solid fa-circle-exclamation text-rose-400 text-sm"></i>
+                <span>Erro de conexão ao buscar vagas nas plataformas.</span>
+            </div>
+            <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-rose-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        `;
+        feedback.classList.remove('hidden');
+    }
+}
+
+// --- FILTROS E PESQUISA NA TABELA ---
+
+function setJobFilter(filterType) {
+    currentJobFilter = filterType;
+    document.querySelectorAll('.job-filter-tab').forEach(tab => {
+        tab.className = 'job-filter-tab px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white';
+    });
+    const activeTab = document.getElementById(`filter-tab-${filterType}`);
+    if (activeTab) {
+        activeTab.className = 'job-filter-tab active px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-white bg-slate-800 border border-slate-700 shadow';
+    }
+    applyJobFiltersAndRender();
+}
+
+function handleTableQuickSearch(event) {
+    jobQuickSearchQuery = event.target.value.toLowerCase().trim();
+    applyJobFiltersAndRender();
+}
+
+function applyJobFiltersAndRender() {
+    let filtered = [...allJobs];
+
+    if (currentJobFilter === 'unviewed') {
+        filtered = filtered.filter(j => !j.is_viewed);
+    } else if (currentJobFilter === 'interest') {
+        filtered = filtered.filter(j => j.user_interest === 'Interesse');
+    } else if (currentJobFilter === 'pcd') {
+        filtered = filtered.filter(j => j.pcd_type === 'Afirmativa PCD' || j.pcd_type === 'Exclusiva PCD');
+    } else if (currentJobFilter === 'open') {
+        filtered = filtered.filter(j => j.is_open === true);
+    } else if (currentJobFilter === 'applied') {
+        filtered = filtered.filter(j => j.status === 'Aplicado' || j.user_interest === 'Aplicado');
+    }
+
+    if (jobQuickSearchQuery) {
+        filtered = filtered.filter(j => {
+            const title = (j.title || '').toLowerCase();
+            const company = (j.company || '').toLowerCase();
+            const loc = (j.location || '').toLowerCase();
+            const skills = (j.skills_required || '').toLowerCase();
+            const pcd = (j.pcd_type || '').toLowerCase();
+            const src = (j.primary_source || '').toLowerCase();
+            return title.includes(jobQuickSearchQuery) ||
+                   company.includes(jobQuickSearchQuery) ||
+                   loc.includes(jobQuickSearchQuery) ||
+                   skills.includes(jobQuickSearchQuery) ||
+                   pcd.includes(jobQuickSearchQuery) ||
+                   src.includes(jobQuickSearchQuery);
+        });
+    }
+
+    const countEl = document.getElementById('table-showing-count');
+    if (countEl) {
+        countEl.textContent = `Exibindo ${filtered.length} de ${allJobs.length} vagas registradas`;
+    }
+
+    renderJobsTable(filtered);
+}
+
+// --- RENDERIZAÇÃO DA TABELA DE VAGAS (8 COLUNAS) ---
+
+async function loadJobOpportunities() {
+    try {
+        const res = await fetch('/api/job-search/jobs');
+        if (res.ok) {
+            allJobs = await res.json();
+            applyJobFiltersAndRender();
+            loadStats();
+        }
+    } catch (e) {
+        console.error('Erro ao carregar oportunidades de vagas:', e);
     }
 }
 
 function renderJobsTable(jobs) {
     const tbody = document.getElementById('jobs-tbody');
+    if (!tbody) return;
+
     if (!jobs || jobs.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="6" class="py-8 text-center text-slate-500">
+                <td colspan="8" class="py-12 text-center text-slate-500">
+                    <i class="fa-solid fa-inbox text-3xl mb-2 text-slate-600 block"></i>
                     Nenhuma vaga encontrada para este filtro.
                 </td>
             </tr>
@@ -788,43 +1072,152 @@ function renderJobsTable(jobs) {
     }
 
     tbody.innerHTML = jobs.map(j => {
-        const fitColor = j.fit_score >= 70 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                         j.fit_score >= 40 ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
-                         'bg-slate-500/10 text-slate-400 border-slate-500/20';
+        // 1. Visto toggle
+        const isViewed = !!j.is_viewed;
+        const viewedBtn = isViewed
+            ? `<button onclick="handleToggleJobViewed(${j.id}, true)" class="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30 transition-all flex items-center justify-center mx-auto" title="Marcada como VISTA. Clique para marcar como NÃO VISTA."><i class="fa-solid fa-eye text-xs"></i></button>`
+            : `<button onclick="handleToggleJobViewed(${j.id}, false)" class="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/50 animate-pulse transition-all flex items-center justify-center mx-auto" title="NÃO VISTA (Nova!). Clique para marcar como vista."><i class="fa-solid fa-eye-slash text-xs"></i></button>`;
+
+        // 2. Cargo / Fit
+        const fitScore = j.fit_score ?? 0;
+        const fitBadgeClass = fitScore >= 70 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                              fitScore >= 40 ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' :
+                              'bg-slate-700/50 text-slate-400 border-slate-600/50';
+
+        const skills = (j.skills_required || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 3);
+        const skillsBadges = skills.map(s => `<span class="bg-slate-900 border border-slate-700 text-slate-400 px-1.5 py-0.5 rounded text-[10px]">${s}</span>`).join(' ');
+
+        // 3. PCD
+        let pcdBadge = `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-900 text-slate-400 border border-slate-700">Ampla</span>`;
+        if (j.pcd_type === 'Exclusiva PCD') {
+            pcdBadge = `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-purple-950/70 text-purple-300 border border-purple-500/50 shadow-sm"><i class="fa-solid fa-wheelchair text-[11px]"></i> Exclusiva</span>`;
+        } else if (j.pcd_type === 'Afirmativa PCD') {
+            pcdBadge = `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-950/70 text-emerald-300 border border-emerald-500/50 shadow-sm"><i class="fa-solid fa-universal-access text-[11px]"></i> Afirmativa</span>`;
+        }
+
+        // 4. Inscrição / Prazo
+        const isOpen = j.is_open !== false;
+        const openBadge = isOpen
+            ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-teal-950/60 text-teal-300 border border-teal-600/40"><span class="w-1.5 h-1.5 rounded-full bg-teal-400"></span> Aberta</span>`
+            : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-950/60 text-rose-300 border border-rose-600/40"><span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span> Encerrada</span>`;
+
+        let deadlineText = '';
+        if (j.application_deadline) {
+            try {
+                const d = new Date(j.application_deadline);
+                if (!isNaN(d.getTime())) {
+                    deadlineText = `<div class="text-[10px] text-slate-400 mt-0.5"><i class="fa-regular fa-clock text-[9px] mr-1"></i>Até ${d.toLocaleDateString('pt-BR')}</div>`;
+                }
+            } catch (err) {}
+        }
+
+        // 5. Fontes (Multi-plataforma & Deduplicação)
+        const primarySrc = j.primary_source || 'Gupy';
+        const primaryCfg = JOB_PLATFORM_CONFIG[primarySrc] || { color: 'bg-slate-800 text-slate-300 border-slate-700', icon: 'fa-solid fa-globe' };
+        
+        let sourcesHtml = `
+            <a href="${j.link || '#'}" target="_blank" rel="noopener noreferrer"
+               class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border transition-all ${primaryCfg.color}">
+                <i class="${primaryCfg.icon} text-[10px]"></i>
+                <span>${primarySrc}</span>
+                <i class="fa-solid fa-arrow-up-right-from-square text-[8px] opacity-70 ml-0.5"></i>
+            </a>
+        `;
+
+        if (j.other_sources) {
+            try {
+                const others = JSON.parse(j.other_sources);
+                if (Array.isArray(others) && others.length > 0) {
+                    sourcesHtml += `<div class="flex flex-wrap items-center gap-1 mt-1">`;
+                    others.forEach(o => {
+                        const oCfg = JOB_PLATFORM_CONFIG[o.source] || { color: 'bg-slate-800 text-slate-300 border-slate-700', icon: 'fa-solid fa-link' };
+                        sourcesHtml += `
+                            <a href="${o.link || '#'}" target="_blank" rel="noopener noreferrer" title="Também disponível no ${o.source}"
+                               class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-all ${oCfg.color}">
+                                <i class="${oCfg.icon} text-[9px]"></i>
+                                <span>${o.source}</span>
+                            </a>
+                        `;
+                    });
+                    sourcesHtml += `</div>`;
+                }
+            } catch (err) {}
+        }
+
+        // 6. Interesse / Ações
+        const currentInterest = j.user_interest || 'Pendente';
 
         return `
-            <tr class="hover:bg-slate-800/40 transition-colors">
-                <td class="py-4 px-4">
-                    <div class="font-bold text-white text-base">${j.title}</div>
-                    <div class="text-xs text-slate-400 mt-0.5"><i class="fa-solid fa-building text-slate-500 mr-1"></i>${j.company}</div>
+            <tr class="hover:bg-slate-800/40 transition-colors ${!isViewed ? 'bg-amber-500/[0.02]' : ''}">
+                <!-- 1. Visto -->
+                <td class="py-3 px-3 text-center align-middle">
+                    ${viewedBtn}
                 </td>
-                <td class="py-4 px-4">
-                    <div class="text-xs text-slate-300"><i class="fa-solid fa-location-dot text-rose-400 mr-1"></i>${j.location}</div>
-                    <span class="inline-block mt-1 px-2 py-0.5 text-[10px] font-mono bg-slate-900 text-slate-400 rounded border border-slate-700">${j.work_model}</span>
+
+                <!-- 2. Cargo / Fit -->
+                <td class="py-3 px-4 align-middle">
+                    <div class="flex items-center gap-2">
+                        <a href="${j.link || '#'}" target="_blank" rel="noopener noreferrer" class="font-bold text-white text-sm hover:text-sky-400 transition-colors line-clamp-1">
+                            ${j.title}
+                        </a>
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono border ${fitBadgeClass} whitespace-nowrap">
+                            ${fitScore}% fit
+                        </span>
+                    </div>
+                    ${skillsBadges ? `<div class="flex flex-wrap items-center gap-1 mt-1">${skillsBadges}</div>` : ''}
                 </td>
-                <td class="py-4 px-4">
-                    <div class="text-xs text-emerald-400 font-medium">${j.salary || 'Não informado'}</div>
-                    <div class="text-[11px] text-slate-400 mt-0.5 truncate max-w-xs" title="${j.skills_required || ''}">${j.skills_required || 'Sem requisitos especificados'}</div>
+
+                <!-- 3. Empresa -->
+                <td class="py-3 px-4 align-middle">
+                    <div class="text-xs font-semibold text-slate-200 truncate max-w-[160px]">${j.company}</div>
+                    ${j.salary ? `<div class="text-[11px] text-emerald-400 font-medium mt-0.5">${j.salary}</div>` : ''}
                 </td>
-                <td class="py-4 px-4 text-center">
-                    <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold font-mono border ${fitColor}">
-                        ${j.fit_score}% Fit
+
+                <!-- 4. Local / Modelo -->
+                <td class="py-3 px-4 align-middle">
+                    <div class="text-xs text-slate-300 flex items-center gap-1">
+                        <i class="fa-solid fa-location-dot text-rose-400 text-[10px]"></i>
+                        <span class="truncate max-w-[130px]">${j.location || 'Brasil'}</span>
+                    </div>
+                    <span class="inline-block mt-0.5 px-2 py-0.5 text-[10px] font-mono bg-slate-900 text-slate-400 rounded border border-slate-700">
+                        ${j.work_model || 'Remoto'}
                     </span>
                 </td>
-                <td class="py-4 px-4 text-center">
-                    <select onchange="handleUpdateJobStatus(${j.id}, this.value)" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-purple-500 font-medium">
-                        <option value="Nova" ${j.status === 'Nova' ? 'selected' : ''}>Nova</option>
-                        <option value="CV Gerado" ${j.status === 'CV Gerado' ? 'selected' : ''}>CV Gerado</option>
-                        <option value="Aplicado" ${j.status === 'Aplicado' ? 'selected' : ''}>Aplicado</option>
-                        <option value="Entrevista" ${j.status === 'Entrevista' ? 'selected' : ''}>Entrevista</option>
-                        <option value="Aprovado" ${j.status === 'Aprovado' ? 'selected' : ''}>Aprovado</option>
-                        <option value="Descartado" ${j.status === 'Descartado' ? 'selected' : ''}>Descartado</option>
-                    </select>
+
+                <!-- 5. PCD -->
+                <td class="py-3 px-3 text-center align-middle">
+                    ${pcdBadge}
                 </td>
-                <td class="py-4 px-4 text-right">
+
+                <!-- 6. Inscrição -->
+                <td class="py-3 px-3 text-center align-middle">
+                    <div class="flex items-center justify-center gap-1">
+                        ${openBadge}
+                        <button onclick="handleCheckJobStatus(${j.id}, this)" title="Verificar status da inscrição ao vivo" class="text-slate-500 hover:text-sky-400 p-1 rounded transition-colors">
+                            <i class="fa-solid fa-arrows-rotate text-[10px]"></i>
+                        </button>
+                    </div>
+                    ${deadlineText}
+                </td>
+
+                <!-- 7. Onde se Candidatar -->
+                <td class="py-3 px-4 align-middle">
+                    ${sourcesHtml}
+                </td>
+
+                <!-- 8. Meu Interesse / Ações -->
+                <td class="py-3 px-4 text-right align-middle">
                     <div class="flex items-center justify-end gap-2">
-                        ${j.link ? `<a href="${j.link}" target="_blank" rel="noopener" class="text-slate-400 hover:text-emerald-400 p-1.5"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>` : ''}
-                        <button onclick="handleDeleteJob(${j.id})" class="text-slate-400 hover:text-rose-400 p-1.5"><i class="fa-solid fa-trash"></i></button>
+                        <select onchange="handleUpdateInterest(${j.id}, this.value)"
+                                class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500 font-medium">
+                            <option value="Pendente" ${currentInterest === 'Pendente' ? 'selected' : ''}>⏳ Pendente</option>
+                            <option value="Interesse" ${currentInterest === 'Interesse' ? 'selected' : ''}>⭐ Tenho Interesse</option>
+                            <option value="Sem Interesse" ${currentInterest === 'Sem Interesse' ? 'selected' : ''}>✖️ Sem Interesse</option>
+                            <option value="Aplicado" ${currentInterest === 'Aplicado' || j.status === 'Aplicado' ? 'selected' : ''}>🚀 Já Apliquei</option>
+                        </select>
+                        <button onclick="handleDeleteJob(${j.id})" title="Excluir vaga da base" class="text-slate-500 hover:text-rose-400 p-1.5 rounded transition-colors">
+                            <i class="fa-solid fa-trash text-xs"></i>
+                        </button>
                     </div>
                 </td>
             </tr>
@@ -832,12 +1225,112 @@ function renderJobsTable(jobs) {
     }).join('');
 }
 
+// --- AÇÕES DO USUÁRIO NAS VAGAS ---
+
+async function handleToggleJobViewed(jobId, currentViewedState) {
+    const newState = !currentViewedState;
+    // Optimistic update
+    const job = allJobs.find(j => j.id === jobId);
+    if (job) {
+        job.is_viewed = newState;
+        applyJobFiltersAndRender();
+    }
+
+    try {
+        const res = await fetch(`/api/job-search/jobs/${jobId}/viewed`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_viewed: newState })
+        });
+        if (res.ok) {
+            loadStats();
+        }
+    } catch (e) {
+        console.error('Erro ao atualizar status visto:', e);
+    }
+}
+
+async function handleUpdateInterest(jobId, newInterest) {
+    const job = allJobs.find(j => j.id === jobId);
+    if (job) {
+        job.user_interest = newInterest;
+        if (newInterest === 'Interesse' || newInterest === 'Aplicado') {
+            job.is_viewed = true;
+        }
+        if (newInterest === 'Aplicado') {
+            job.status = 'Aplicado';
+        }
+        applyJobFiltersAndRender();
+    }
+
+    try {
+        const res = await fetch(`/api/job-search/jobs/${jobId}/interest`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ interest: newInterest })
+        });
+        if (res.ok) {
+            showToast(`Interesse atualizado para "${newInterest}"`);
+            loadStats();
+        }
+    } catch (e) {
+        console.error('Erro ao atualizar interesse:', e);
+    }
+}
+
+async function handleMarkAllViewed() {
+    try {
+        const res = await fetch('/api/job-search/jobs/mark-all-viewed', { method: 'POST' });
+        if (res.ok) {
+            showToast('Todas as vagas foram marcadas como visualizadas!');
+            allJobs.forEach(j => j.is_viewed = true);
+            applyJobFiltersAndRender();
+            loadStats();
+        }
+    } catch (e) {
+        showToast('Erro ao marcar vagas como visualizadas.', 'error');
+    }
+}
+
+async function handleCheckJobStatus(jobId, btnEl) {
+    if (btnEl) {
+        const icon = btnEl.querySelector('i');
+        if (icon) icon.classList.add('fa-spin');
+    }
+
+    try {
+        const res = await fetch(`/api/job-search/jobs/${jobId}/check-status`, { method: 'POST' });
+        const data = await res.json();
+        if (btnEl) {
+            const icon = btnEl.querySelector('i');
+            if (icon) icon.classList.remove('fa-spin');
+        }
+
+        if (res.ok) {
+            const job = allJobs.find(j => j.id === jobId);
+            if (job) {
+                job.is_open = data.is_open;
+                applyJobFiltersAndRender();
+            }
+            showToast(`Status checado: ${data.is_open ? 'Vaga em aberto ✅' : 'Vaga encerrada ⚠️'}`);
+        } else {
+            showToast(data.detail || 'Não foi possível verificar status no portal.', 'error');
+        }
+    } catch (e) {
+        if (btnEl) {
+            const icon = btnEl.querySelector('i');
+            if (icon) icon.classList.remove('fa-spin');
+        }
+        showToast('Erro ao checar status da vaga.', 'error');
+    }
+}
+
 function openAddJobModal() {
-    document.getElementById('modal-job').classList.remove('hidden');
+    document.getElementById('modal-job')?.classList.remove('hidden');
 }
 
 function closeAddJobModal() {
-    document.getElementById('modal-job').classList.add('hidden');
+    document.getElementById('modal-job')?.classList.add('hidden');
 }
 
 async function handleAddJob(event) {
@@ -847,6 +1340,8 @@ async function handleAddJob(event) {
     const location = document.getElementById('input-job-location').value.trim() || 'Remoto';
     const work_model = document.getElementById('input-job-model').value;
     const salary = document.getElementById('input-job-salary').value.trim();
+    const pcd_type = document.getElementById('input-job-pcd')?.value || 'Ampla';
+    const is_open = (document.getElementById('input-job-is-open')?.value ?? 'true') === 'true';
     const link = document.getElementById('input-job-link').value.trim();
     const skills_required = document.getElementById('input-job-skills').value.trim();
     const notes = document.getElementById('input-job-notes').value.trim();
@@ -857,7 +1352,9 @@ async function handleAddJob(event) {
         const res = await fetch('/api/job-search/jobs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, company, location, work_model, salary, link, skills_required, notes })
+            body: JSON.stringify({
+                title, company, location, work_model, salary, pcd_type, is_open, link, skills_required, notes
+            })
         });
 
         if (res.ok) {
@@ -867,7 +1364,7 @@ async function handleAddJob(event) {
             document.getElementById('input-job-link').value = '';
             document.getElementById('input-job-skills').value = '';
             document.getElementById('input-job-notes').value = '';
-            showToast('Oportunidade cadastrada com sucesso!');
+            showToast('Vaga cadastrada com sucesso!');
             loadJobOpportunities();
         } else {
             showToast('Erro ao cadastrar vaga.', 'error');
@@ -886,23 +1383,29 @@ async function handleUpdateJobStatus(jobId, newStatus) {
         });
 
         if (res.ok) {
-            showToast(`Status da vaga atualizado para "${newStatus}"!`);
-            loadJobOpportunities();
+            showToast(`Status atualizado para "${newStatus}"!`);
+            const job = allJobs.find(j => j.id === jobId);
+            if (job) {
+                job.status = newStatus;
+                applyJobFiltersAndRender();
+            }
         } else {
             showToast('Erro ao atualizar status.', 'error');
         }
     } catch (e) {
-        showToast('Erro ao atualizar vaga.', 'error');
+        showToast('Erro de conexão ao atualizar status.', 'error');
     }
 }
 
 async function handleDeleteJob(jobId) {
-    if (!confirm('Deseja excluir esta vaga do painel?')) return;
+    if (!confirm('Deseja excluir esta vaga da base de dados?')) return;
     try {
         const res = await fetch(`/api/job-search/jobs/${jobId}`, { method: 'DELETE' });
         if (res.ok) {
-            showToast('Vaga excluída.');
-            loadJobOpportunities();
+            showToast('Vaga excluída com sucesso.');
+            allJobs = allJobs.filter(j => j.id !== jobId);
+            applyJobFiltersAndRender();
+            loadStats();
         }
     } catch (e) {
         showToast('Erro ao excluir vaga.', 'error');

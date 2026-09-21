@@ -1,9 +1,10 @@
 import os
 import logging
 import httpx
-from typing import Optional, List
+from typing import Optional, List, Any
 from sqlalchemy.orm import Session
 from app.models import TelegramSettings, Concurso
+
 
 logger = logging.getLogger("telegram_notifier")
 
@@ -86,3 +87,60 @@ async def notify_new_concursos(concursos: List[Concurso], db: Session) -> int:
         db.commit()
 
     return sent_count
+
+
+async def notify_new_jobs(jobs: List[Any], db: Session) -> int:
+    """
+    Envia alertas no Telegram para novas vagas detectadas.
+    Formata com cargo, empresa, localização, modalidade, status de abertura, política PCD e fontes com links.
+    """
+    if not jobs:
+        return 0
+
+    sent_count = 0
+    for job in jobs:
+        pcd_label = (
+            "♿ <b>Vaga Exclusiva PCD</b>" if job.pcd_type == "Exclusiva PCD"
+            else "🤝 <b>Vaga Afirmativa PCD</b>" if job.pcd_type == "Afirmativa PCD"
+            else "👥 <b>Ampla Concorrência</b>"
+        )
+        
+        status_label = "🟢 <b>Inscrição Em Aberto</b>"
+        if job.application_deadline:
+            status_label += f" (Até {job.application_deadline})"
+            
+        # Montar links das fontes encontradas
+        sources_links = []
+        if job.other_sources:
+            try:
+                import json
+                s_list = json.loads(job.other_sources)
+                for s in s_list:
+                    src_name = s.get("source", "Link")
+                    src_url = s.get("link", "")
+                    if src_url:
+                        sources_links.append(f"<a href='{src_url}'>{src_name}</a>")
+            except Exception:
+                pass
+
+        if not sources_links and job.link:
+            sources_links.append(f"<a href='{job.link}'>{job.primary_source or 'Candidatar-se'}</a>")
+
+        sources_html = " | ".join(sources_links) if sources_links else "Link direto não informado"
+
+        msg = (
+            f"💼 <b>Nova Vaga Detectada!</b> 💼\n\n"
+            f"📋 <b>Cargo:</b> {job.title}\n"
+            f"🏢 <b>Empresa:</b> {job.company}\n"
+            f"📍 <b>Local:</b> {job.location} ({job.work_model})\n"
+            f"{pcd_label}\n"
+            f"{status_label}\n"
+            f"🌐 <b>Onde se candidatar:</b> {sources_html}\n"
+        )
+
+        success = await send_telegram_message(msg, db=db)
+        if success:
+            sent_count += 1
+
+    return sent_count
+

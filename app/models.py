@@ -115,9 +115,23 @@ class JobOpportunity(Base):
     skills_required = Column(Text, nullable=True)     # Requisitos identificados
     fit_score = Column(Float, default=0.0)             # Match % calculado
     status = Column(String(50), default="Nova")        # Nova, CV Gerado, Aplicado, Entrevista, Aprovado, Descartado
+    
+    # Novos campos para controle pessoal, PCD, status de abertura e deduplicação
+    is_viewed = Column(Boolean, default=False, index=True) # Controle pessoal: Já vi ou Não
+    viewed_at = Column(DateTime, nullable=True)
+    user_interest = Column(String(50), default="Pendente", index=True) # Pendente, Interesse, Sem Interesse, Aplicado
+    is_open = Column(Boolean, default=True, index=True) # Inscrição em aberto ou encerrada
+    application_deadline = Column(String(100), nullable=True) # Prazo final informado
+    pcd_type = Column(String(30), default="Ampla", index=True) # Ampla, Afirmativa PCD, Exclusiva PCD
+    primary_source = Column(String(50), default="Gupy") # Plataforma principal onde foi encontrada
+    other_sources = Column(Text, nullable=True) # JSON: [{"source": "LinkedIn", "link": "..."}, ...]
+    dedup_hash = Column(String(64), index=True, nullable=True) # Chave para deduplicação entre plataformas
+    last_checked_at = Column(DateTime, default=datetime.utcnow) # Data da última checagem de status
+    
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 class FinanceTransaction(Base):
     __tablename__ = "finance_transactions"
