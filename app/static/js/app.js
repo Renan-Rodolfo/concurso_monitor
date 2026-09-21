@@ -979,7 +979,13 @@ async function triggerRunJobSearch() {
             btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-arrow-right"></i><span>Buscar Vagas Agora</span>';
         }
 
-        const data = await res.json();
+        let data = {};
+        try {
+            data = await res.json();
+        } catch (_) {
+            data = { detail: 'Resposta inesperada do servidor durante a busca.' };
+        }
+
         if (res.ok) {
             if (feedback) {
                 feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-emerald-950/60 border border-emerald-500/40 text-emerald-300';
@@ -996,6 +1002,7 @@ async function triggerRunJobSearch() {
             await loadJobOpportunities();
             await loadStats();
         } else {
+            renderJobsTable(allJobs);
             if (feedback) {
                 feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-rose-950/60 border border-rose-500/40 text-rose-300';
                 feedback.innerHTML = `
@@ -1012,6 +1019,7 @@ async function triggerRunJobSearch() {
     } catch (e) {
         clearInterval(jobSearchInterval);
         if (loader) loader.classList.add('hidden');
+        renderJobsTable(allJobs);
         if (btn) {
             btn.disabled = false;
             btn.className = 'bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold px-7 py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-sky-600/30 flex items-center gap-2';
@@ -1022,7 +1030,7 @@ async function triggerRunJobSearch() {
             feedback.innerHTML = `
                 <div class="flex items-center gap-2">
                     <i class="fa-solid fa-circle-exclamation text-rose-400 text-base"></i>
-                    <span>Erro de conexão ao buscar vagas nas plataformas.</span>
+                    <span>Falha na requisição: ${e.message || 'Verifique sua conexão ou se o serviço foi reiniciado.'}</span>
                 </div>
                 <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-rose-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
             `;

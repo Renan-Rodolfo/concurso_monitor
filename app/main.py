@@ -261,6 +261,7 @@ class JobRunSearchParams(BaseModel):
     selected_adjacents: Optional[List[str]] = None
     platforms: Optional[List[str]] = None
     location: Optional[str] = "Brasil"
+    work_mode: Optional[str] = None
     work_model: Optional[str] = None
     jobage: Optional[int] = None
     notify_telegram: Optional[bool] = False
@@ -819,19 +820,28 @@ async def run_job_search(params: JobRunSearchParams, db: Session = Depends(get_d
     primary = params.primary_term.strip() or "Analista de Suporte"
     selected_adjacents = params.selected_adjacents or []
     
-    # Expandir termos
-    queries = taxonomy.expand_search_terms(primary, selected_adjacents, max_total=4)
-    logger.info(f"Busca multi-plataforma iniciada para: {queries} nas plataformas: {params.platforms}")
+    # Se o usuário selecionou termos adjacentes, pesquisa o principal + selecionados (máximo 4 termos)
+    if selected_adjacents:
+        queries = [primary] + [a for a in selected_adjacents if a != primary][:3]
+    else:
+        queries = [primary]
+        
+    effective_work_mode = params.work_mode or params.work_model
+    logger.info(f"Busca multi-plataforma iniciada para: {queries} nas plataformas: {params.platforms} (modalidade: {effective_work_mode})")
 
     # Executar busca nas plataformas selecionadas
-    raw_results = await js.run_multi_platform_search(
-        queries=queries,
-        selected_platform_keys=params.platforms,
-        location=params.location or "Brasil",
-        work_mode=params.work_mode,
-        jobage=params.jobage,
-        max_per_platform=12
-    )
+    try:
+        raw_results = await js.run_multi_platform_search(
+            queries=queries,
+            selected_platform_keys=params.platforms,
+            location=params.location or "Brasil",
+            work_mode=effective_work_mode,
+            jobage=params.jobage,
+            max_per_platform=12
+        )
+    except Exception as e:
+        logger.error(f"Erro durante execução da busca multi-plataforma: {e}", exc_info=True)
+        raw_results = []
 
     profile = db.query(models.CandidateProfile).first()
     cand_skills = [s.strip() for s in profile.primary_skills.split(",") if s.strip()] if (profile and profile.primary_skills) else []
