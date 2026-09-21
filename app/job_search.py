@@ -125,6 +125,103 @@ def detect_open_status(deadline_str: Optional[str] = None, text: str = "") -> Tu
     return True, formatted_deadline
 
 
+def detect_work_model(text: str, default: str = "Presencial") -> str:
+    """
+    Identifica de forma inteligente o modelo de trabalho (Remoto, Híbrido, Presencial)
+    a partir de títulos, descrições ou textos de cards.
+    """
+    lower = text.lower()
+
+    # Padrões expressos para REMOTO / HOME OFFICE
+    is_negated_remote = bool(re.search(r'\b(n[ãa]o\s+(aceitamos|permitimos|trabalhamos|oferecemos)?\s*(com\s*)?remoto|sem\s+remoto|n[ãa]o\s+[eé]\s+remoto)\b', lower))
+    has_remote = bool(
+        re.search(r'\b(100%\s*remoto|totalmente\s*remoto|trabalho\s*remoto|vaga\s*remota|anywhere\s*in\s*brazil|home\s*office|teletrabalho)\b', lower) or
+        ("remoto" in lower and not is_negated_remote)
+    )
+
+    # Padrões expressos para HÍBRIDO
+    has_hybrid = bool(re.search(r'\b(h[íi]brido|hybrid|modelo\s*h[íi]brido|regime\s*h[íi]brido|dias\s+presenciais?)\b', lower))
+
+    # Padrões expressos para PRESENCIAL
+    has_onsite = bool(re.search(r'\b(100%\s*presencial|totalmente\s*presencial|trabalho\s*presencial|presencial\s*obrigat[óo]rio|atuar\s*presencial|in\s*loco|no\s*local)\b', lower))
+
+    # Se indicar híbrido (mesmo mencionando home office parcial), o modelo real é Híbrido
+    if has_hybrid and not re.search(r'\b(100%\s*remoto|totalmente\s*remoto)\b', lower):
+        return "Híbrido"
+
+    # Se indicar remoto e não tiver presença exclusiva ou negação
+    if has_remote and not has_onsite and not is_negated_remote:
+        return "Remoto"
+
+    # Se indicar presencial
+    if has_onsite or "presencial" in lower:
+        return "Presencial"
+
+    return default
+
+
+def matches_work_mode(job: Dict[str, Any], requested_mode: Optional[str]) -> bool:
+    """
+    Valida estritamente se a vaga atende ao filtro de modalidade de trabalho desejado.
+    - Se requested_mode for vazio, None ou 'all'/'todas', aceita qualquer vaga.
+    - Se 'remote': aceita APENAS vagas que declaram explicitamente trabalho Remoto / Home Office.
+    - Se 'hybrid': aceita apenas vagas Híbridas.
+    - Se 'onsite': aceita apenas vagas Presenciais.
+    """
+    if not requested_mode:
+        return True
+
+    req = requested_mode.strip().lower()
+    if req in ("", "all", "todas", "qualquer", "qualquer modalidade"):
+        return True
+
+    wm = (job.get("work_model") or "").strip().lower()
+    loc = (job.get("location") or "").strip().lower()
+    title = (job.get("title") or "").strip().lower()
+    desc = (job.get("description") or "").strip().lower()
+    full_text = f"{title} {wm} {loc} {desc}"
+
+    if req in ("remote", "remoto"):
+        # Se classificado expressamente como Presencial ou Híbrido, descarta sumariamente
+        if wm in ("presencial", "onsite", "in-person", "híbrido", "hibrido", "hybrid"):
+            # Apenas se houver menção inequívoca de '100% remoto' em título/descrição
+            if not re.search(r'\b(100%\s*remoto|totalmente\s*remoto)\b', full_text):
+                return False
+
+        # Verifica se o texto confirma ser remoto
+        if wm in ("remoto", "remote"):
+            # Rejeita se há negação explícita de remoto
+            if re.search(r'\b(n[ãa]o\s+[eé]\s+remoto|sem\s+remoto|100%\s*presencial)\b', full_text):
+                return False
+            return True
+
+        # Se work_model não estava definido como Remoto, checa se título/localização/descrição comprovam ser remoto
+        is_explicit = bool(
+            re.search(r'\b(100%\s*remoto|totalmente\s*remoto|trabalho\s*remoto|vaga\s*remota|home\s*office|teletrabalho|anywhere)\b', full_text) or
+            ("remoto" in loc or "home office" in loc or "teletrabalho" in loc or "remoto" in title)
+        )
+        if is_explicit and not re.search(r'\b(n[ãa]o\s+[eé]\s+remoto|sem\s+remoto|100%\s*presencial|presencial)\b', full_text):
+            job["work_model"] = "Remoto"
+            return True
+
+        return False
+
+    if req in ("hybrid", "hibrido", "híbrido"):
+        if wm in ("híbrido", "hibrido", "hybrid"):
+            return True
+        return bool(re.search(r'\b(h[íi]brido|hybrid|modelo\s*h[íi]brido|regime\s*h[íi]brido)\b', full_text))
+
+    if req in ("onsite", "presencial"):
+        if wm in ("remoto", "remote", "híbrido", "hibrido", "hybrid"):
+            return False
+        return bool(
+            wm in ("presencial", "onsite") or
+            re.search(r'\b(presencial|no\s+local|in\s+loco)\b', full_text)
+        )
+
+    return True
+
+
 # ---------------------------------------------------------------------------
 # ADAPTADORES DAS 10 PLATAFORMAS
 # ---------------------------------------------------------------------------
@@ -132,6 +229,7 @@ def detect_open_status(deadline_str: Optional[str] = None, text: str = "") -> Tu
 async def search_gupy_br(
     client: httpx.AsyncClient,
     query: str,
+    work_mode: Optional[str] = None,
     max_results: int = 15
 ) -> List[Dict[str, Any]]:
     """
@@ -142,6 +240,15 @@ async def search_gupy_br(
     try:
         encoded_query = urllib.parse.quote(query)
         url = f"https://portal.gupy.io/job-search/term={encoded_query}"
+        if work_mode:
+            wm_param = work_mode.strip().lower()
+            if wm_param in ("remote", "remoto"):
+                url += "&workplaceType=remote"
+            elif wm_param in ("hybrid", "hibrido", "híbrido"):
+                url += "&workplaceType=hybrid"
+            elif wm_param in ("onsite", "presencial"):
+                url += "&workplaceType=on-site"
+
         resp = await client.get(url, headers=BROWSER_HEADERS, timeout=12.0, follow_redirects=True)
         if resp.status_code != 200:
             logger.warning(f"Gupy retornou {resp.status_code} para '{query}'")
@@ -167,21 +274,21 @@ async def search_gupy_br(
                 loc = f"{city}, {state}".strip(", ") if (city or state) else "Brasil"
 
                 raw_wm = (job.get("workplaceType") or "").lower()
-                wm = "Remoto" if "remote" in raw_wm else "Híbrido" if "hybrid" in raw_wm else "Presencial" if "site" in raw_wm else "Não informado"
+                description = job.get("description") or ""
+                wm = "Remoto" if "remote" in raw_wm else "Híbrido" if "hybrid" in raw_wm else "Presencial" if "site" in raw_wm else detect_work_model(f"{title} {description}")
 
                 deadline = job.get("applicationDeadline")
                 is_open, deadline_fmt = detect_open_status(deadline)
 
                 badges = job.get("badges") or {}
                 has_pwd = bool(badges.get("isPWD") or job.get("disabilities"))
-                description = job.get("description") or ""
                 pcd_status = detect_pcd_type(title, description, raw_flag=has_pwd)
 
                 job_url = job.get("jobUrl") or ""
                 if not job_url and job.get("id"):
                     job_url = f"https://portal.gupy.io/job/{job.get('id')}"
 
-                results.append({
+                item = {
                     "title": title,
                     "company": company,
                     "location": loc,
@@ -196,7 +303,10 @@ async def search_gupy_br(
                     "is_open": is_open,
                     "application_deadline": deadline_fmt,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(item, work_mode):
+                    continue
+                results.append(item)
             except Exception as e:
                 logger.debug(f"Erro ao parsear item Gupy: {e}")
                 continue
@@ -260,15 +370,16 @@ async def search_linkedin_br(
                 link_el = card.find("a", class_=re.compile(r"base-card__full-link"))
                 job_url = link_el.get("href", "").split("?")[0] if link_el else ""
 
-                card_text = card.get_text(" ", strip=True).lower()
-                wm = "Remoto" if "remot" in card_text else "Híbrido" if "híbrid" in card_text else "Presencial"
+                card_text = card.get_text(" ", strip=True)
+                default_wm = "Remoto" if (work_mode and work_mode.lower() in ("remote", "remoto")) else "Presencial"
+                wm = detect_work_model(f"{title} {card_text}", default=default_wm)
 
                 date_el = card.find("time")
                 posted_at = date_el.get("datetime", "") if date_el else ""
 
                 pcd_status = detect_pcd_type(title, card_text)
 
-                results.append({
+                item = {
                     "title": title,
                     "company": company,
                     "location": loc,
@@ -283,7 +394,10 @@ async def search_linkedin_br(
                     "is_open": True,
                     "application_deadline": None,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(item, work_mode):
+                    continue
+                results.append(item)
             except Exception as e:
                 logger.debug(f"Erro ao parsear card LinkedIn: {e}")
                 continue
@@ -297,6 +411,7 @@ async def search_linkedin_br(
 async def search_infojobs_br(
     client: httpx.AsyncClient,
     query: str,
+    work_mode: Optional[str] = None,
     max_results: int = 15
 ) -> List[Dict[str, Any]]:
     """
@@ -335,15 +450,16 @@ async def search_infojobs_br(
 
                 card_text = card.get_text(" ", strip=True)
                 pcd_status = detect_pcd_type(title, card_text)
+                wm = detect_work_model(f"{title} {card_text}", default="Presencial")
 
                 salary_el = card.find(class_=re.compile(r"salary|salario"))
                 salary = salary_el.get_text(strip=True) if salary_el else None
 
-                results.append({
+                item = {
                     "title": title,
                     "company": company,
                     "location": loc,
-                    "work_model": "Remoto" if "remoto" in card_text.lower() else "Presencial",
+                    "work_model": wm,
                     "salary": salary,
                     "link": job_url,
                     "description": card_text[:300],
@@ -354,7 +470,10 @@ async def search_infojobs_br(
                     "is_open": True,
                     "application_deadline": None,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(item, work_mode):
+                    continue
+                results.append(item)
             except Exception as e:
                 continue
 
@@ -367,6 +486,7 @@ async def search_infojobs_br(
 async def search_catho_br(
     client: httpx.AsyncClient,
     query: str,
+    work_mode: Optional[str] = None,
     max_results: int = 15
 ) -> List[Dict[str, Any]]:
     """
@@ -397,15 +517,16 @@ async def search_catho_br(
 
                 card_text = art.get_text(" ", strip=True)
                 pcd_status = detect_pcd_type(title, card_text)
+                wm = detect_work_model(f"{title} {card_text}", default="Presencial")
 
                 company_match = re.search(r'([A-Z0-9][A-Za-z0-9\s.,&-]{2,30})\b', card_text)
                 company = company_match.group(1).strip() if company_match else "Empresa Confidencial"
 
-                results.append({
+                item = {
                     "title": title,
                     "company": company,
                     "location": "Brasil",
-                    "work_model": "Remoto" if "remoto" in card_text.lower() else "Presencial",
+                    "work_model": wm,
                     "salary": None,
                     "link": job_url,
                     "description": card_text[:300],
@@ -416,7 +537,10 @@ async def search_catho_br(
                     "is_open": True,
                     "application_deadline": None,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(item, work_mode):
+                    continue
+                results.append(item)
             except Exception as e:
                 continue
 
@@ -429,6 +553,7 @@ async def search_catho_br(
 async def search_vagas_br(
     client: httpx.AsyncClient,
     query: str,
+    work_mode: Optional[str] = None,
     max_results: int = 15
 ) -> List[Dict[str, Any]]:
     """
@@ -464,12 +589,13 @@ async def search_vagas_br(
 
                 card_text = card.get_text(" ", strip=True)
                 pcd_status = detect_pcd_type(title, card_text)
+                wm = detect_work_model(f"{title} {card_text}", default="Presencial")
 
-                results.append({
+                item = {
                     "title": title,
                     "company": company,
                     "location": loc,
-                    "work_model": "Remoto" if "remoto" in card_text.lower() else "Presencial",
+                    "work_model": wm,
                     "salary": None,
                     "link": job_url,
                     "description": card_text[:300],
@@ -480,7 +606,10 @@ async def search_vagas_br(
                     "is_open": True,
                     "application_deadline": None,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(item, work_mode):
+                    continue
+                results.append(item)
             except Exception as e:
                 continue
 
@@ -534,16 +663,17 @@ async def search_freehire_br(
             job_url = job.get("url") or f"https://freehire.dev/jobs/{job_id}"
 
             raw_wm = (job.get("work_mode") or "").lower()
-            wm = {"remote": "Remoto", "hybrid": "Híbrido", "onsite": "Presencial"}.get(raw_wm, "Não informado")
+            description = (job.get("description") or "").replace("<p>", "").replace("</p>", " ")[:300]
+            default_wm = {"remote": "Remoto", "hybrid": "Híbrido", "onsite": "Presencial"}.get(raw_wm)
+            wm = default_wm if default_wm else detect_work_model(f"{title} {description}", default="Remoto" if work_mode == "remote" else "Presencial")
 
             skills = ", ".join(job.get("skills") or [])
-            description = (job.get("description") or "").replace("<p>", "").replace("</p>", " ")[:300]
             pcd_status = detect_pcd_type(title, description)
 
-            results.append({
+            item = {
                 "title": title,
                 "company": company,
-                "location": job.get("location") or "Brasil",
+                "location": job.get("location") or ("Remoto" if wm == "Remoto" else "Brasil"),
                 "work_model": wm,
                 "salary": None,
                 "link": job_url,
@@ -555,7 +685,10 @@ async def search_freehire_br(
                 "is_open": True,
                 "application_deadline": None,
                 "query_used": query,
-            })
+            }
+            if not matches_work_mode(item, work_mode):
+                continue
+            results.append(item)
     except Exception as e:
         logger.error(f"Erro ao buscar freehire para '{query}': {e}")
 
@@ -565,6 +698,7 @@ async def search_freehire_br(
 async def search_bne_br(
     client: httpx.AsyncClient,
     query: str,
+    work_mode: Optional[str] = None,
     max_results: int = 15
 ) -> List[Dict[str, Any]]:
     """
@@ -597,12 +731,13 @@ async def search_bne_br(
 
                 card_text = card.get_text(" ", strip=True)
                 pcd_status = detect_pcd_type(title, card_text)
+                wm = detect_work_model(f"{title} {card_text}", default="Presencial")
 
-                results.append({
+                item = {
                     "title": title,
                     "company": "Empresa via BNE",
                     "location": "Brasil",
-                    "work_model": "Remoto" if "home office" in card_text.lower() or "remoto" in card_text.lower() else "Presencial",
+                    "work_model": wm,
                     "salary": None,
                     "link": job_url,
                     "description": card_text[:300],
@@ -613,7 +748,10 @@ async def search_bne_br(
                     "is_open": True,
                     "application_deadline": None,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(item, work_mode):
+                    continue
+                results.append(item)
             except Exception as e:
                 continue
 
@@ -626,6 +764,7 @@ async def search_bne_br(
 async def search_empregos_br(
     client: httpx.AsyncClient,
     query: str,
+    work_mode: Optional[str] = None,
     max_results: int = 15
 ) -> List[Dict[str, Any]]:
     """
@@ -658,12 +797,13 @@ async def search_empregos_br(
 
                 card_text = item.get_text(" ", strip=True)
                 pcd_status = detect_pcd_type(title, card_text)
+                wm = detect_work_model(f"{title} {card_text}", default="Presencial")
 
-                results.append({
+                job_obj = {
                     "title": title,
                     "company": "Empresa Confidencial",
                     "location": "Brasil",
-                    "work_model": "Remoto" if "remoto" in card_text.lower() else "Presencial",
+                    "work_model": wm,
                     "salary": None,
                     "link": job_url,
                     "description": card_text[:300],
@@ -674,7 +814,10 @@ async def search_empregos_br(
                     "is_open": True,
                     "application_deadline": None,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(job_obj, work_mode):
+                    continue
+                results.append(job_obj)
             except Exception as e:
                 continue
 
@@ -687,6 +830,7 @@ async def search_empregos_br(
 async def search_trampos_br(
     client: httpx.AsyncClient,
     query: str,
+    work_mode: Optional[str] = None,
     max_results: int = 15
 ) -> List[Dict[str, Any]]:
     """
@@ -712,11 +856,13 @@ async def search_trampos_br(
                 if not job_url.startswith("http"):
                     job_url = f"https://trampos.co{job_url}"
 
-                results.append({
+                wm = detect_work_model(title, default="Remoto" if "remoto" in title.lower() else "Presencial")
+
+                job_obj = {
                     "title": title,
                     "company": "Empresa via Trampos",
                     "location": "Brasil",
-                    "work_model": "Remoto" if "remoto" in title.lower() else "Não informado",
+                    "work_model": wm,
                     "salary": None,
                     "link": job_url,
                     "description": "",
@@ -727,7 +873,10 @@ async def search_trampos_br(
                     "is_open": True,
                     "application_deadline": None,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(job_obj, work_mode):
+                    continue
+                results.append(job_obj)
             except Exception as e:
                 continue
 
@@ -740,6 +889,7 @@ async def search_trampos_br(
 async def search_aggregator_br(
     client: httpx.AsyncClient,
     query: str,
+    work_mode: Optional[str] = None,
     max_results: int = 15
 ) -> List[Dict[str, Any]]:
     """
@@ -757,7 +907,7 @@ async def search_aggregator_br(
                 title = job.get("title") or job.get("name")
                 if not title:
                     continue
-                results.append({
+                job_obj = {
                     "title": title,
                     "company": job.get("company") or "Empresa parceira",
                     "location": "Remoto",
@@ -772,7 +922,10 @@ async def search_aggregator_br(
                     "is_open": True,
                     "application_deadline": None,
                     "query_used": query,
-                })
+                }
+                if not matches_work_mode(job_obj, work_mode):
+                    continue
+                results.append(job_obj)
     except Exception as e:
         logger.debug(f"Agregador aberto não respondeu ou sem resultados para '{query}'")
 
@@ -827,7 +980,7 @@ async def run_multi_platform_search(
                 elif key == "freehire":
                     tasks.append(scraper_func(client, q, work_mode=work_mode, jobage=jobage, max_results=max_per_platform))
                 else:
-                    tasks.append(scraper_func(client, q, max_results=max_per_platform))
+                    tasks.append(scraper_func(client, q, work_mode=work_mode, max_results=max_per_platform))
 
         batches = await asyncio.gather(*tasks, return_exceptions=True)
         for batch in batches:
@@ -837,7 +990,11 @@ async def run_multi_platform_search(
             if isinstance(batch, list):
                 all_raw_jobs.extend(batch)
 
-    logger.info(f"Total bruto de vagas encontradas nas {len(selected_platform_keys)} plataformas: {len(all_raw_jobs)}")
+    # Filtragem estrita de modalidade de trabalho
+    if work_mode and work_mode.strip().lower() not in ("", "all", "todas", "qualquer", "qualquer modalidade"):
+        all_raw_jobs = [j for j in all_raw_jobs if matches_work_mode(j, work_mode)]
+
+    logger.info(f"Total de vagas válidas encontradas nas {len(selected_platform_keys)} plataformas: {len(all_raw_jobs)}")
 
     # Deduplicação cross-plataforma em memória
     consolidated_jobs: List[Dict[str, Any]] = []

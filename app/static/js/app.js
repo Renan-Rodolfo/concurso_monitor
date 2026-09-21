@@ -1071,6 +1071,13 @@ function applyJobFiltersAndRender() {
         filtered = filtered.filter(j => j.pcd_type === 'Afirmativa PCD' || j.pcd_type === 'Exclusiva PCD');
     } else if (currentJobFilter === 'open') {
         filtered = filtered.filter(j => j.is_open === true);
+    } else if (currentJobFilter === 'remote') {
+        filtered = filtered.filter(j => {
+            const wm = (j.work_model || '').toLowerCase();
+            const loc = (j.location || '').toLowerCase();
+            const title = (j.title || '').toLowerCase();
+            return wm === 'remoto' || wm.includes('remoto') || loc.includes('remoto') || title.includes('remoto');
+        });
     } else if (currentJobFilter === 'applied') {
         filtered = filtered.filter(j => j.status === 'Aplicado' || j.user_interest === 'Aplicado');
     }

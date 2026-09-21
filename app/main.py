@@ -868,6 +868,10 @@ async def run_job_search(params: JobRunSearchParams, db: Session = Depends(get_d
     cand_skills = [s.strip() for s in profile.primary_skills.split(",") if s.strip()] if (profile and profile.primary_skills) else []
     target_roles = [r.strip() for r in profile.target_roles.split(",") if r.strip()] if (profile and profile.target_roles) else [primary]
 
+    # Filtragem de segurança adicional por modalidade antes de gravar na base
+    if effective_work_mode and effective_work_mode.strip().lower() not in ("", "all", "todas", "qualquer", "qualquer modalidade"):
+        raw_results = [r for r in raw_results if js.matches_work_mode(r, effective_work_mode)]
+
     existing_jobs = db.query(models.JobOpportunity).all()
     newly_added: List[models.JobOpportunity] = []
     merged_count = 0
