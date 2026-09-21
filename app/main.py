@@ -664,7 +664,17 @@ def get_job_opportunities(
             (models.JobOpportunity.location.ilike(term))
         )
 
-    return query.order_by(models.JobOpportunity.created_at.desc()).all()
+    from sqlalchemy import case
+
+    order_rules = [
+        case(
+            (models.JobOpportunity.user_interest == 'Sem Interesse', 2),
+            (models.JobOpportunity.is_viewed == True, 1),
+            else_=0
+        ),
+        models.JobOpportunity.created_at.desc()
+    ]
+    return query.order_by(*order_rules).all()
 
 @app.post("/api/job-search/jobs")
 def create_job_opportunity(job_data: JobOpportunityCreate, db: Session = Depends(get_db)):

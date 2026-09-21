@@ -1060,6 +1060,26 @@ function handleTableQuickSearch(event) {
     applyJobFiltersAndRender();
 }
 
+function getJobSortRank(j) {
+    // Rank 5: Vagas marcadas como 'Sem Interesse' vão DIRETO para o final absoluto da lista
+    if (j.user_interest === 'Sem Interesse') return 5;
+
+    // Rank 4: Inscrições encerradas (se não for sem interesse)
+    if (j.is_open === false) return 4;
+
+    // Rank 3: Já aplicadas
+    if (j.status === 'Aplicado' || j.user_interest === 'Aplicado') return 3;
+
+    // Rank 0: Tenho Interesse (favoritas / alta relevância fixadas no topo)
+    if (j.user_interest === 'Interesse') return 0;
+
+    // Rank 1: Novas / Não visualizadas (próximas da fila para avaliação imediata)
+    if (!j.is_viewed) return 1;
+
+    // Rank 2: Já visualizadas, mas ainda pendentes de decisão
+    return 2;
+}
+
 function applyJobFiltersAndRender() {
     let filtered = [...allJobs];
 
@@ -1098,6 +1118,23 @@ function applyJobFiltersAndRender() {
                    src.includes(jobQuickSearchQuery);
         });
     }
+
+    // Ordenação dinâmica para fluxo ágil de triagem:
+    // As vagas marcadas como "Sem Interesse" descem imediatamente para o final da lista,
+    // liberando o topo da tabela para que a próxima vaga a ser avaliada fique em destaque.
+    filtered.sort((a, b) => {
+        const rankA = getJobSortRank(a);
+        const rankB = getJobSortRank(b);
+        if (rankA !== rankB) {
+            return rankA - rankB;
+        }
+        const fitA = a.fit_score ?? 0;
+        const fitB = b.fit_score ?? 0;
+        if (fitB !== fitA) {
+            return fitB - fitA;
+        }
+        return (b.id || 0) - (a.id || 0);
+    });
 
     const countEl = document.getElementById('table-showing-count');
     if (countEl) {
@@ -1213,9 +1250,10 @@ function renderJobsTable(jobs) {
 
         // 6. Interesse / Ações
         const currentInterest = j.user_interest || 'Pendente';
+        const isDismissed = currentInterest === 'Sem Interesse';
 
         return `
-            <tr class="hover:bg-slate-800/40 transition-colors ${!isViewed ? 'bg-amber-500/[0.02]' : ''}">
+            <tr class="hover:bg-slate-800/40 transition-all ${isDismissed ? 'opacity-50 hover:opacity-100 bg-slate-900/50' : !isViewed ? 'bg-amber-500/[0.02]' : ''}">
                 <!-- 1. Visto -->
                 <td class="py-3 px-3 text-center align-middle">
                     ${viewedBtn}
@@ -1276,7 +1314,7 @@ function renderJobsTable(jobs) {
                 <td class="py-3 px-4 text-right align-middle">
                     <div class="flex items-center justify-end gap-2">
                         <select onchange="handleUpdateInterest(${j.id}, this.value)"
-                                class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500 font-medium">
+                                class="bg-slate-900 border ${isDismissed ? 'border-rose-500/40 text-rose-300' : currentInterest === 'Interesse' ? 'border-purple-500/60 text-purple-300' : 'border-slate-700 text-white'} rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-purple-500 font-medium transition-colors">
                             <option value="Pendente" ${currentInterest === 'Pendente' ? 'selected' : ''}>⏳ Pendente</option>
                             <option value="Interesse" ${currentInterest === 'Interesse' ? 'selected' : ''}>⭐ Tenho Interesse</option>
                             <option value="Sem Interesse" ${currentInterest === 'Sem Interesse' ? 'selected' : ''}>✖️ Sem Interesse</option>
@@ -1321,7 +1359,7 @@ async function handleUpdateInterest(jobId, newInterest) {
     const job = allJobs.find(j => j.id === jobId);
     if (job) {
         job.user_interest = newInterest;
-        if (newInterest === 'Interesse' || newInterest === 'Aplicado') {
+        if (newInterest === 'Interesse' || newInterest === 'Aplicado' || newInterest === 'Sem Interesse') {
             job.is_viewed = true;
         }
         if (newInterest === 'Aplicado') {
@@ -1337,7 +1375,11 @@ async function handleUpdateInterest(jobId, newInterest) {
             body: JSON.stringify({ interest: newInterest })
         });
         if (res.ok) {
-            showToast(`Interesse atualizado para "${newInterest}"`);
+            if (newInterest === 'Sem Interesse') {
+                showToast('Vaga movida para o final da lista.', 'info');
+            } else {
+                showToast(`Interesse atualizado para "${newInterest}"`);
+            }
             loadStats();
         }
     } catch (e) {
