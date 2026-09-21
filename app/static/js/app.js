@@ -634,7 +634,6 @@ async function handleDeleteTopic(topicId) {
 // --- JOB SEARCH & CANDIDATE HUB ---
 
 let currentJobSubTab = 'profile';
-let allJobs = [];
 
 function switchJobSubTab(subTabName) {
     currentJobSubTab = subTabName;
@@ -891,7 +890,10 @@ async function triggerRunJobSearch() {
     const btn = document.getElementById('btn-run-search');
     const loader = document.getElementById('job-search-loader');
     const loaderStatus = document.getElementById('job-search-loader-status');
+    const loaderSubstatus = document.getElementById('job-search-loader-substatus');
+    const progressBar = document.getElementById('job-search-progress-bar');
     const feedback = document.getElementById('job-search-feedback');
+    const tbody = document.getElementById('jobs-tbody');
 
     const primaryTerm = (document.getElementById('search-primary-term')?.value.trim()) || 'Analista de Suporte';
     const location = (document.getElementById('search-location')?.value.trim()) || 'Brasil';
@@ -908,24 +910,54 @@ async function triggerRunJobSearch() {
         platforms: []
     };
 
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Buscando...';
-    loader.classList.remove('hidden');
-    feedback.classList.add('hidden');
+    // Feedback visual imediato no botão e na tela
+    showToast(`Varredura iniciada para "${primaryTerm}"...`, 'info');
+    
+    if (btn) {
+        btn.disabled = true;
+        btn.className = 'bg-slate-700 text-slate-300 font-bold px-7 py-2.5 rounded-xl text-sm transition-all flex items-center gap-2 cursor-wait';
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-sky-400 mr-1"></i><span>Buscando Vagas...</span>';
+    }
 
-    const statusMessages = [
-        'Consultando Gupy (vagas brasileiras, prazos e PCD)...',
-        'Buscando no LinkedIn Guest API...',
-        'Consultando InfoJobs e Catho...',
-        'Consultando Vagas.com.br e freehire.dev...',
-        'Consultando BNE, Empregos.com e Trampos.co...',
-        'Deduplicando vagas cross-plataforma e consolidando fontes...'
+    if (loader) {
+        loader.classList.remove('hidden');
+        if (progressBar) progressBar.style.width = '15%';
+    }
+    if (feedback) feedback.classList.add('hidden');
+
+    // Se a tabela estiver vazia, exibir indicador dentro da própria tabela
+    if (tbody && (!allJobs || allJobs.length === 0)) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="8" class="py-14 text-center">
+                    <div class="inline-flex flex-col items-center gap-3">
+                        <div class="w-10 h-10 border-4 border-slate-700 border-t-sky-400 border-r-indigo-400 rounded-full animate-spin"></div>
+                        <p class="text-sm font-semibold text-slate-300">Varredura em andamento...</p>
+                        <p class="text-xs text-slate-500">Consultando e deduplicando vagas nas 10 plataformas em tempo real</p>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }
+
+    const stages = [
+        { title: 'Consultando Gupy & LinkedIn...', sub: 'Buscando vagas ativas, prazos e políticas afirmativas/exclusivas PCD', progress: '30%' },
+        { title: 'Consultando InfoJobs & Catho...', sub: 'Varrendo oportunidades no mercado nacional e aplicando filtros', progress: '50%' },
+        { title: 'Consultando Vagas.com.br & freehire.dev...', sub: 'Buscando posições remotas e presenciais com expansão de termos', progress: '70%' },
+        { title: 'Consultando BNE, Empregos.com & Trampos...', sub: 'Coletando vagas de portais especializados de tecnologia e suporte', progress: '85%' },
+        { title: 'Consolidando dados & deduplicando...', sub: 'Cruzando títulos e empresas para unificar links de múltiplas fontes', progress: '92%' }
     ];
-    let msgIndex = 0;
+
+    let stageIdx = 0;
     jobSearchInterval = setInterval(() => {
-        msgIndex = (msgIndex + 1) % statusMessages.length;
-        if (loaderStatus) loaderStatus.textContent = statusMessages[msgIndex];
-    }, 2200);
+        if (stageIdx < stages.length) {
+            const stg = stages[stageIdx];
+            if (loaderStatus) loaderStatus.textContent = stg.title;
+            if (loaderSubstatus) loaderSubstatus.textContent = stg.sub;
+            if (progressBar) progressBar.style.width = stg.progress;
+            stageIdx++;
+        }
+    }, 2400);
 
     try {
         const res = await fetch('/api/job-search/run-search', {
@@ -935,49 +967,69 @@ async function triggerRunJobSearch() {
         });
 
         clearInterval(jobSearchInterval);
-        loader.classList.add('hidden');
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-arrow-right mr-2"></i> Buscar Vagas Agora';
+        if (progressBar) progressBar.style.width = '100%';
+
+        setTimeout(() => {
+            if (loader) loader.classList.add('hidden');
+        }, 600);
+
+        if (btn) {
+            btn.disabled = false;
+            btn.className = 'bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold px-7 py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-sky-600/30 flex items-center gap-2';
+            btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-arrow-right"></i><span>Buscar Vagas Agora</span>';
+        }
 
         const data = await res.json();
         if (res.ok) {
-            feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-emerald-950/60 border border-emerald-500/40 text-emerald-300';
-            feedback.innerHTML = `
-                <div class="flex items-center gap-2">
-                    <i class="fa-solid fa-circle-check text-emerald-400 text-sm"></i>
-                    <span>Varredura concluída! <strong>${data.total_found || 0} vagas</strong> encontradas nas 10 plataformas (<strong>${data.newly_added_count || 0} novas</strong> na base, <strong>${data.merged_duplicates_count || 0} duplicatas</strong> consolidadas).</span>
-                </div>
-                <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-emerald-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
-            `;
-            feedback.classList.remove('hidden');
-            showToast(`Busca concluída: ${data.newly_added_count} vagas novas adicionadas!`);
-            loadJobOpportunities();
-            loadStats();
+            if (feedback) {
+                feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-emerald-950/60 border border-emerald-500/40 text-emerald-300';
+                feedback.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <i class="fa-solid fa-circle-check text-emerald-400 text-base"></i>
+                        <span>Varredura concluída com sucesso! <strong>${data.total_found || 0} vagas</strong> encontradas nas plataformas (<strong>${data.newly_added_count || 0} novas</strong> salvas na base, <strong>${data.merged_duplicates_count || 0} duplicatas</strong> consolidadas).</span>
+                    </div>
+                    <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-emerald-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                `;
+                feedback.classList.remove('hidden');
+            }
+            showToast(`Varredura finalizada: ${data.newly_added_count} vagas novas adicionadas!`);
+            await loadJobOpportunities();
+            await loadStats();
         } else {
+            if (feedback) {
+                feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-rose-950/60 border border-rose-500/40 text-rose-300';
+                feedback.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <i class="fa-solid fa-circle-exclamation text-rose-400 text-base"></i>
+                        <span>Erro na busca: ${data.detail || 'Falha ao executar varredura.'}</span>
+                    </div>
+                    <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-rose-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                `;
+                feedback.classList.remove('hidden');
+            }
+            showToast('Erro ao executar busca.', 'error');
+        }
+    } catch (e) {
+        clearInterval(jobSearchInterval);
+        if (loader) loader.classList.add('hidden');
+        if (btn) {
+            btn.disabled = false;
+            btn.className = 'bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-bold px-7 py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-sky-600/30 flex items-center gap-2';
+            btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-arrow-right"></i><span>Buscar Vagas Agora</span>';
+        }
+        if (feedback) {
             feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-rose-950/60 border border-rose-500/40 text-rose-300';
             feedback.innerHTML = `
                 <div class="flex items-center gap-2">
-                    <i class="fa-solid fa-circle-exclamation text-rose-400 text-sm"></i>
-                    <span>Erro na busca: ${data.detail || 'Falha ao executar varredura.'}</span>
+                    <i class="fa-solid fa-circle-exclamation text-rose-400 text-base"></i>
+                    <span>Erro de conexão ao buscar vagas nas plataformas.</span>
                 </div>
                 <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-rose-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
             `;
             feedback.classList.remove('hidden');
         }
-    } catch (e) {
-        clearInterval(jobSearchInterval);
-        loader.classList.add('hidden');
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-magnifying-glass-arrow-right mr-2"></i> Buscar Vagas Agora';
-        feedback.className = 'mt-4 p-3.5 rounded-xl text-xs font-medium flex items-center justify-between gap-3 bg-rose-950/60 border border-rose-500/40 text-rose-300';
-        feedback.innerHTML = `
-            <div class="flex items-center gap-2">
-                <i class="fa-solid fa-circle-exclamation text-rose-400 text-sm"></i>
-                <span>Erro de conexão ao buscar vagas nas plataformas.</span>
-            </div>
-            <button onclick="document.getElementById('job-search-feedback').classList.add('hidden')" class="text-rose-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
-        `;
-        feedback.classList.remove('hidden');
+        showToast('Erro de conexão ao buscar vagas.', 'error');
+        console.error('Job search error:', e);
     }
 }
 
