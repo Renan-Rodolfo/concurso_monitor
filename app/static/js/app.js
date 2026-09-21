@@ -1352,6 +1352,55 @@ async function handleMarkAllViewed() {
     }
 }
 
+async function handleClearJobs() {
+    const totalCurrent = allJobs.length;
+    if (totalCurrent === 0) {
+        showToast('A base de vagas já está vazia.', 'info');
+        return;
+    }
+
+    const confirmMsg = `Deseja realmente ZERAR a base de dados de vagas (${totalCurrent} vagas salvas)?\n\nIsso removerá todas as vagas registradas para que você possa iniciar uma nova varredura com outro termo ou modalidade.`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        const res = await fetch('/api/job-search/jobs/clear', { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            allJobs = [];
+            applyJobFiltersAndRender();
+            await loadStats();
+            const feedback = document.getElementById('job-search-feedback');
+            if (feedback) feedback.classList.add('hidden');
+            showToast(data.message || 'Base de vagas zerada com sucesso!', 'success');
+        } else {
+            showToast(data.detail || 'Erro ao limpar vagas da base.', 'error');
+        }
+    } catch (e) {
+        showToast('Erro de conexão ao limpar base de vagas.', 'error');
+        console.error('Clear jobs error:', e);
+    }
+}
+
+function handleResetSearchFilters() {
+    const primaryInput = document.getElementById('search-primary-term');
+    const locationInput = document.getElementById('search-location');
+    const workmodeSelect = document.getElementById('search-workmode');
+    const telegramCheck = document.getElementById('search-notify-telegram');
+
+    if (primaryInput) primaryInput.value = 'Analista de Suporte';
+    if (locationInput) locationInput.value = 'Brasil';
+    if (workmodeSelect) workmodeSelect.value = '';
+    if (telegramCheck) telegramCheck.checked = true;
+
+    selectedAdjacentTerms.clear();
+    loadAdjacentTerms('Analista de Suporte');
+
+    const feedback = document.getElementById('job-search-feedback');
+    if (feedback) feedback.classList.add('hidden');
+
+    showToast('Filtros do formulário resetados para o padrão.', 'info');
+}
+
 async function handleCheckJobStatus(jobId, btnEl) {
     if (btnEl) {
         const icon = btnEl.querySelector('i');

@@ -782,6 +782,27 @@ def update_job_status(job_id: int, data: JobOpportunityUpdateStatus, db: Session
     db.refresh(job)
     return job
 
+@app.delete("/api/job-search/jobs/clear")
+def clear_job_opportunities(
+    status: Optional[str] = None,
+    only_unviewed: Optional[bool] = False,
+    db: Session = Depends(get_db)
+):
+    """Limpa as vagas da base de dados (todas ou com filtros)."""
+    query = db.query(models.JobOpportunity)
+    if only_unviewed:
+        deleted_count = query.filter(models.JobOpportunity.is_viewed == False).delete()
+        msg = f"{deleted_count} vagas não visualizadas foram removidas da base."
+    elif status and status != "Todas":
+        deleted_count = query.filter(models.JobOpportunity.status == status).delete()
+        msg = f"{deleted_count} vagas com status '{status}' foram removidas da base."
+    else:
+        deleted_count = query.delete()
+        msg = f"Todas as vagas ({deleted_count} vagas) foram removidas da base com sucesso."
+
+    db.commit()
+    return {"status": "success", "deleted_count": deleted_count, "message": msg}
+
 @app.delete("/api/job-search/jobs/{job_id}")
 def delete_job_opportunity(job_id: int, db: Session = Depends(get_db)):
     job = db.query(models.JobOpportunity).filter(models.JobOpportunity.id == job_id).first()
