@@ -59,6 +59,22 @@ files ready    with fit ratings     (LaTeX, tailored)
 
 The framework encodes career guidance best practices, including structured evaluation criteria, forward-looking cover letter framing, and optional salary benchmarking.
 
+---
+
+## 🇧🇷 Buscando Trabalho: Aplicação Web de Monitoramento de Vagas & Concursos
+
+Este repositório conta também com o módulo **Buscando Trabalho** (localizado no diretório [`concurso_monitor/`](concurso_monitor/)), uma aplicação web *self-hosted* full stack em **Python (FastAPI + SQLite + TailwindCSS)** projetada para o mercado brasileiro:
+
+- 💼 **Vagas no Mercado Privado**: Busca integrada multi-plataforma (**Gupy, Catho, Glassdoor, LinkedIn**), cálculo de Match/Fit Score automático em relação ao perfil do candidato, classificação PCD (Ampla, Afirmativa, Exclusiva) e rastreamento de candidaturas.
+- 🏛️ **Concursos Públicos**: Monitoramento automatizado de editais por municípios e estados (via PCI Concursos e JC Concursos) com links diretos aos editais oficiais.
+- 📢 **Central de Notificações via Telegram**: Bot integrado para alertas automáticos diários de novas vagas e concursos na sua região via APScheduler.
+- 📚 **Edital Verticalizado**: Guia de acompanhamento de matérias, tópicos, horas e índice de acertos em questões.
+- 🐳 **Deploy Simples**: Suporte nativo a Docker e Docker Compose para execução em servidores locais, VPS ou Proxmox LXC.
+
+> 📖 Para instruções de instalação e uso do módulo web, consulte a documentação detalhada em [`concurso_monitor/README.md`](concurso_monitor/README.md).
+
+---
+
 ## Prerequisites
 
 - [Claude Code](https://claude.com/claude-code) (CLI). Using a different agent tool (Codex, Antigravity, Gemini CLI)? Start at [`AGENTS.md`](AGENTS.md) - the portal search skills work there out of the box, and [community forks](https://github.com/MadsLorentzen/ai-job-search/discussions/78) adapt the full workflow.
