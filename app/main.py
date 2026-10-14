@@ -15,7 +15,6 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime
 import httpx
 from app import job_search as js
-from app import finance
 from app import taxonomy
 from app import deduplication
 
@@ -27,7 +26,7 @@ from app.telegram import send_telegram_message, get_telegram_config, notify_new_
 
 # Configuração de logs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("concurso_app")
+logger = logging.getLogger("buscando_trabalho")
 
 # Inicialização do APScheduler
 scheduler = AsyncIOScheduler()
@@ -114,14 +113,6 @@ def check_and_migrate_db():
     from sqlalchemy import text
     try:
         with engine.connect() as conn:
-            # Migração finance_transactions
-            res_fin = conn.execute(text("PRAGMA table_info(finance_transactions)"))
-            columns_fin = [row[1] for row in res_fin.fetchall()]
-            if columns_fin and "transaction_type" not in columns_fin:
-                conn.execute(text("ALTER TABLE finance_transactions ADD COLUMN transaction_type VARCHAR(20) DEFAULT 'expense'"))
-                conn.commit()
-                logger.info("Migração: coluna 'transaction_type' adicionada em finance_transactions.")
-
             # Migração job_opportunities
             res_jobs = conn.execute(text("PRAGMA table_info(job_opportunities)"))
             columns_jobs = [row[1] for row in res_jobs.fetchall()]
@@ -182,7 +173,7 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
     logger.info("APScheduler finalizado.")
 
-app = FastAPI(title="Concurso Monitor & Study Tracker", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Buscando Trabalho - Vagas & Concursos", version="1.0.0", lifespan=lifespan)
 
 # Configuração de arquivos estáticos e templates HTML
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -266,33 +257,6 @@ class JobRunSearchParams(BaseModel):
     jobage: Optional[int] = None
     notify_telegram: Optional[bool] = False
     auto_save: Optional[bool] = True
-
-
-class TransactionCreate(BaseModel):
-    date: str
-    title: str
-    amount: float
-    transaction_type: Optional[str] = "expense"
-    category: Optional[str] = "Outros"
-    payment_method: Optional[str] = "Cartão Nubank"
-    notes: Optional[str] = None
-
-class TransactionUpdate(BaseModel):
-    date: Optional[str] = None
-    title: Optional[str] = None
-    amount: Optional[float] = None
-    transaction_type: Optional[str] = None
-    category: Optional[str] = None
-    payment_method: Optional[str] = None
-    notes: Optional[str] = None
-
-class PasteImportRequest(BaseModel):
-    content: str
-    default_payment_method: Optional[str] = "Cartão Nubank"
-
-class CategoryRuleCreate(BaseModel):
-    keyword: str
-    category_name: str
 
 # --- ROTAS PRINCIPAIS DE TEMPLATES ---
 
@@ -990,9 +954,6 @@ def get_stats(db: Session = Depends(get_db)):
     jobs_pcd_count = db.query(models.JobOpportunity).filter(models.JobOpportunity.pcd_type.in_(["Afirmativa PCD", "Exclusiva PCD"])).count()
     jobs_open_count = db.query(models.JobOpportunity).filter(models.JobOpportunity.is_open == True).count()
 
-    finances_count = db.query(models.FinanceTransaction).count()
-    finances_total_spent = sum([t.amount for t in db.query(models.FinanceTransaction.amount).all()])
-
     return {
         "cities_count": cities_count,
         "concursos_count": concursos_count,
@@ -1005,319 +966,7 @@ def get_stats(db: Session = Depends(get_db)):
         "jobs_unviewed_count": jobs_unviewed_count,
         "jobs_interest_count": jobs_interest_count,
         "jobs_pcd_count": jobs_pcd_count,
-        "jobs_open_count": jobs_open_count,
-        "finances_count": finances_count,
-        "finances_total_spent": round(finances_total_spent, 2)
+        "jobs_open_count": jobs_open_count
     }
 
-
-# --- ROTAS DA API: ANÁLISE FINANCEIRA (NUBANK & GASTOS) ---
-
-@app.get("/api/finances/summary")
-def get_finance_summary(month: Optional[str] = None, db: Session = Depends(get_db)):
-    """Retorna métricas consolidadas de Entradas, Saídas, Saldo Líquido e dados para gráficos."""
-    all_transactions = db.query(models.FinanceTransaction).all()
-    
-    # Calcular resumo geral de todos os meses
-    global_summary = finance.compute_financial_summary(all_transactions)
-    
-    # Se um mês específico foi filtrado, calcular resumo focado nele
-    if month and month != "Todos":
-        filtered_transactions = [t for t in all_transactions if t.month_year == month]
-        month_summary = finance.compute_financial_summary(filtered_transactions)
-        
-        return {
-            "selected_month": month,
-            "total_spent": month_summary["total_spent"],
-            "total_income": month_summary["total_income"],
-            "net_balance": month_summary["net_balance"],
-            "total_transactions": month_summary["total_transactions"],
-            "avg_monthly": global_summary["avg_monthly"],
-            "avg_monthly_income": global_summary["avg_monthly_income"],
-            "top_category": month_summary["top_category"],
-            "top_category_amount": month_summary["top_category_amount"],
-            "top_category_percent": month_summary["top_category_percent"],
-            "available_months": global_summary["available_months"],
-            "categories_breakdown": month_summary["categories_breakdown"],
-            "monthly_breakdown": global_summary["monthly_breakdown"],
-        }
-    
-    return {
-        "selected_month": "Todos",
-        "total_spent": global_summary["total_spent"],
-        "total_income": global_summary["total_income"],
-        "net_balance": global_summary["net_balance"],
-        "total_transactions": global_summary["total_transactions"],
-        "avg_monthly": global_summary["avg_monthly"],
-        "avg_monthly_income": global_summary["avg_monthly_income"],
-        "top_category": global_summary["top_category"],
-        "top_category_amount": global_summary["top_category_amount"],
-        "top_category_percent": global_summary["top_category_percent"],
-        "available_months": global_summary["available_months"],
-        "categories_breakdown": global_summary["categories_breakdown"],
-        "monthly_breakdown": global_summary["monthly_breakdown"],
-    }
-
-@app.get("/api/finances/transactions")
-def get_finance_transactions(
-    month: Optional[str] = None,
-    category: Optional[str] = None,
-    tx_type: Optional[str] = None,
-    search: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    """Lista as transações financeiras com suporte a filtros por mês, categoria, tipo (entrada/saída) e busca textual."""
-    query = db.query(models.FinanceTransaction)
-    
-    if month and month != "Todos":
-        query = query.filter(models.FinanceTransaction.month_year == month)
-    if category and category != "Todas":
-        query = query.filter(models.FinanceTransaction.category == category)
-    if tx_type and tx_type in ["income", "expense"]:
-        query = query.filter(models.FinanceTransaction.transaction_type == tx_type)
-    if search:
-        search_clean = search.strip()
-        query = query.filter(models.FinanceTransaction.title.ilike(f"%{search_clean}%"))
-
-    return query.order_by(models.FinanceTransaction.date.desc(), models.FinanceTransaction.id.desc()).all()
-
-@app.post("/api/finances/transactions")
-def create_finance_transaction(data: TransactionCreate, db: Session = Depends(get_db)):
-    """Adiciona manualmente um gasto ou entrada."""
-    clean_title = data.title.strip()
-    if not clean_title:
-        raise HTTPException(status_code=400, detail="Título do lançamento é obrigatório")
-
-    dt_obj, month_year = finance.parse_date_str(data.date)
-    tx_type = data.transaction_type or "expense"
-    
-    category = data.category.strip() if data.category else ("Entradas" if tx_type == "income" else "Outros")
-    if category in ["Outros", ""]:
-        rules = db.query(models.FinanceCategoryRule).all()
-        rule_dicts = [{"keyword": r.keyword, "category_name": r.category_name} for r in rules]
-        category = finance.categorize_transaction(clean_title, None, rule_dicts, tx_type=tx_type)
-
-    new_tx = models.FinanceTransaction(
-        date=dt_obj,
-        month_year=month_year,
-        title=clean_title,
-        amount=finance.parse_amount(data.amount),
-        transaction_type=tx_type,
-        category=category,
-        payment_method=data.payment_method.strip() if data.payment_method else "Cartão Nubank",
-        notes=data.notes.strip() if data.notes else None
-    )
-    db.add(new_tx)
-    db.commit()
-    db.refresh(new_tx)
-    return new_tx
-
-@app.put("/api/finances/transactions/{tx_id}")
-def update_finance_transaction(tx_id: int, data: TransactionUpdate, db: Session = Depends(get_db)):
-    """Atualiza dados de uma transação (como tipo, categoria, valor ou notas)."""
-    tx = db.query(models.FinanceTransaction).filter(models.FinanceTransaction.id == tx_id).first()
-    if not tx:
-        raise HTTPException(status_code=404, detail="Lançamento não encontrado")
-
-    if data.title is not None:
-        tx.title = data.title.strip()
-    if data.amount is not None:
-        tx.amount = finance.parse_amount(data.amount)
-    if data.transaction_type is not None:
-        tx.transaction_type = data.transaction_type.strip()
-    if data.category is not None:
-        tx.category = data.category.strip()
-    if data.payment_method is not None:
-        tx.payment_method = data.payment_method.strip()
-    if data.notes is not None:
-        tx.notes = data.notes.strip()
-    if data.date is not None:
-        dt_obj, month_year = finance.parse_date_str(data.date)
-        tx.date = dt_obj
-        tx.month_year = month_year
-
-    db.commit()
-    db.refresh(tx)
-    return tx
-
-@app.delete("/api/finances/transactions/{tx_id}")
-def delete_finance_transaction(tx_id: int, db: Session = Depends(get_db)):
-    """Remove uma transação individual."""
-    tx = db.query(models.FinanceTransaction).filter(models.FinanceTransaction.id == tx_id).first()
-    if not tx:
-        raise HTTPException(status_code=404, detail="Lançamento não encontrado")
-    db.delete(tx)
-    db.commit()
-    return {"status": "success", "message": "Lançamento excluído com sucesso"}
-
-@app.post("/api/finances/upload")
-async def upload_finance_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Importa faturas a partir do upload de arquivos CSV, OFX ou TXT do Nubank."""
-    try:
-        raw_bytes = await file.read()
-        try:
-            content = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            content = raw_bytes.decode("latin-1", errors="ignore")
-
-        rules = db.query(models.FinanceCategoryRule).all()
-        rule_dicts = [{"keyword": r.keyword, "category_name": r.category_name} for r in rules]
-
-        filename_lower = file.filename.lower() if file.filename else ""
-        
-        if filename_lower.endswith(".ofx") or "<OFX>" in content or "<STMTTRN>" in content:
-            parsed_items = finance.parse_ofx(content, rule_dicts)
-        else:
-            parsed_items = finance.parse_nubank_csv(content, rule_dicts)
-            if not parsed_items:
-                parsed_items = finance.parse_raw_text(content, rule_dicts)
-
-        if not parsed_items:
-            raise HTTPException(
-                status_code=400,
-                detail="Nenhuma transação válida foi encontrada no arquivo. Certifique-se de que é uma fatura CSV/OFX do Nubank."
-            )
-
-        db_items = []
-        for item in parsed_items:
-            new_tx = models.FinanceTransaction(
-                date=item["date"],
-                month_year=item["month_year"],
-                title=item["title"],
-                amount=item["amount"],
-                transaction_type=item.get("transaction_type", "expense"),
-                category=item["category"],
-                original_category=item.get("original_category"),
-                payment_method=item.get("payment_method", "Extrato / Cartão Nubank")
-            )
-            db.add(new_tx)
-            db_items.append(new_tx)
-
-        db.commit()
-
-        total_amt = round(sum([i["amount"] for i in parsed_items]), 2)
-        incomes_count = sum(1 for i in parsed_items if i.get("transaction_type") == "income")
-        expenses_count = len(parsed_items) - incomes_count
-        return {
-            "status": "success",
-            "imported_count": len(parsed_items),
-            "incomes_count": incomes_count,
-            "expenses_count": expenses_count,
-            "total_amount": total_amt,
-            "message": f"{len(parsed_items)} lançamentos importados ({incomes_count} entradas e {expenses_count} saídas)!"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Erro ao processar upload de fatura: {e}", exc_info=True)
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao processar o arquivo: {str(e)}"
-        )
-
-@app.post("/api/finances/paste")
-def paste_finance_text(data: PasteImportRequest, db: Session = Depends(get_db)):
-    """Importa faturas a partir de texto bruto colado pelo usuário."""
-    if not data.content.strip():
-        raise HTTPException(status_code=400, detail="Texto da fatura não pode estar vazio")
-
-    rules = db.query(models.FinanceCategoryRule).all()
-    rule_dicts = [{"keyword": r.keyword, "category_name": r.category_name} for r in rules]
-
-    parsed_items = finance.parse_raw_text(data.content, rule_dicts)
-    if not parsed_items:
-        raise HTTPException(status_code=400, detail="Não foi possível identificar lançamentos no texto colado.")
-
-    for item in parsed_items:
-        new_tx = models.FinanceTransaction(
-            date=item["date"],
-            month_year=item["month_year"],
-            title=item["title"],
-            amount=item["amount"],
-            transaction_type=item.get("transaction_type", "expense"),
-            category=item["category"],
-            original_category=item.get("original_category"),
-            payment_method=data.default_payment_method or "Fatura / Extrato Nubank"
-        )
-        db.add(new_tx)
-
-    db.commit()
-
-    total_amt = round(sum([i["amount"] for i in parsed_items]), 2)
-    return {
-        "status": "success",
-        "imported_count": len(parsed_items),
-        "total_amount": total_amt,
-        "message": f"{len(parsed_items)} lançamentos importados com sucesso!"
-    }
-
-@app.delete("/api/finances/clear")
-def clear_finances(month: Optional[str] = None, db: Session = Depends(get_db)):
-    """Limpa lançamentos financeiros (todos ou apenas de um mês selecionado)."""
-    query = db.query(models.FinanceTransaction)
-    if month and month != "Todos":
-        deleted_count = query.filter(models.FinanceTransaction.month_year == month).delete()
-        msg = f"Lançamentos do mês {month} apagados com sucesso ({deleted_count} itens)."
-    else:
-        deleted_count = query.delete()
-        msg = f"Todos os lançamentos financeiros foram apagados com sucesso ({deleted_count} itens)."
-
-    db.commit()
-    return {"status": "success", "deleted_count": deleted_count, "message": msg}
-
-@app.get("/api/finances/rules")
-def get_finance_rules(db: Session = Depends(get_db)):
-    """Lista todas as regras de autocategorização customizadas."""
-    return db.query(models.FinanceCategoryRule).order_by(models.FinanceCategoryRule.keyword).all()
-
-@app.post("/api/finances/rules")
-def add_finance_rule(rule_data: CategoryRuleCreate, recategorize_existing: bool = True, db: Session = Depends(get_db)):
-    """Adiciona uma nova regra de categorização por palavra-chave."""
-    clean_kw = rule_data.keyword.strip()
-    clean_cat = rule_data.category_name.strip()
-
-    if not clean_kw or not clean_cat:
-        raise HTTPException(status_code=400, detail="Palavra-chave e categoria são obrigatórias")
-
-    existing = db.query(models.FinanceCategoryRule).filter(models.FinanceCategoryRule.keyword.ilike(clean_kw)).first()
-    if existing:
-        existing.category_name = clean_cat
-        rule = existing
-    else:
-        rule = models.FinanceCategoryRule(keyword=clean_kw, category_name=clean_cat)
-        db.add(rule)
-
-    db.commit()
-    db.refresh(rule)
-
-    # Reaplicar a transações existentes se solicitado
-    updated_count = 0
-    if recategorize_existing:
-        all_tx = db.query(models.FinanceTransaction).all()
-        rules = db.query(models.FinanceCategoryRule).all()
-        rule_dicts = [{"keyword": r.keyword, "category_name": r.category_name} for r in rules]
-        for tx in all_tx:
-            new_cat = finance.categorize_transaction(tx.title, tx.original_category, rule_dicts)
-            if new_cat != tx.category:
-                tx.category = new_cat
-                updated_count += 1
-        db.commit()
-
-    return {
-        "status": "success",
-        "rule": rule,
-        "updated_transactions_count": updated_count,
-        "message": f"Regra cadastrada! {updated_count} transações foram recategorizadas."
-    }
-
-@app.delete("/api/finances/rules/{rule_id}")
-def delete_finance_rule(rule_id: int, db: Session = Depends(get_db)):
-    """Remove uma regra de categorização."""
-    rule = db.query(models.FinanceCategoryRule).filter(models.FinanceCategoryRule.id == rule_id).first()
-    if not rule:
-        raise HTTPException(status_code=404, detail="Regra não encontrada")
-    db.delete(rule)
-    db.commit()
-    return {"status": "success", "message": "Regra removida com sucesso"}
 
